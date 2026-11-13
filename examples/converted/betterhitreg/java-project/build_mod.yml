@@ -1,0 +1,399 @@
+name: Build Java mod
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create files
+        run: |
+          mkdir -p src/converted/betterhitreg
+          cat > src/converted/betterhitreg/ConvertedMod.java <<'MODEOF'
+          package converted.betterhitreg;
+
+          import org.modhost.*;
+
+          /**
+           * Converted from BetterHitreg by jar2mod.py 0.1.
+           *
+           * The menu and event wiring below are generated. The behaviour of the original Java Edition
+           * mod is NOT translated: Bedrock has none of Java Minecraft's classes. Port the logic by hand,
+           * using report.md and bytecode_notes.txt as a guide.
+           */
+          public class ConvertedMod implements Mod {
+              @Override
+              public void onLoad(ModContext ctx) throws Exception {
+                  Menu menu = new Menu("BetterHitreg")
+                          .description("Clientside mod that registers hits before the server to make hitreg feel faster (use /hitreg to configure)")
+                          .slider("hitreg", "Hitreg", 0, 0, 10)
+                          .slider("total_fights", "Total Fights", 0, 0, 10)
+                          .slider("fight_playtime__seconds_", "Fight Playtime Seconds", 0, 0, 10)
+                          .slider("muffle_amount", "Muffle Amount", 0, 0, 10)
+                          .slider("sharpen_amount", "Sharpen Amount", 0, 0, 10)
+                          .slider("metronome", "Metronome", 0, 0, 10)
+                          .slider("floor_grid_size", "Grid Size", 0, 0, 10)
+                          .slider("floor_grid_range", "Grid Range", 16, 0, 48)
+                          .floatSlider("ground_height", "Ground Height", 0.01, 0.0, 1.0)
+                          .slider("ground_size", "Ground Size", 512, 0, 1536)
+                          .slider("score_x", "Score X", 1, 0, 10)
+                          .slider("score_y", "Score Y", 1, 0, 10)
+                          .slider("approach_hitbox_range", "Approach Hitbox Range", 6, 0, 18)
+                          .slider("sound_hit_window", "Sound Hit Window", 150, 0, 450)
+                          .slider("sound_recency_threshold", "Sound Recency Threshold", 50, 0, 150)
+                          .slider("render", "Ground", 101010, 0, 303030)
+                          .slider("ui", "Background", 0, 0, 10)
+                          .toggle("toggle", "custom hitreg", true)
+                          .toggle("safeRegsOnly", "safe regs only", true)
+                          .toggle("ignoreShieldHolders", "ignore shield holders", false)
+                          .toggle("debugInputs", "debug inputs", false)
+                          .toggle("debugSounds", "debug sounds", false)
+                          .toggle("alertDelays", "alert delays", false)
+                          .toggle("alertGhosts", "alert ghosts", false)
+                          .toggle("alertInconsistencies", "alert inconsistencies", false)
+                          .toggle("alertFights", "alert fights", false)
+                          .toggle("AlertJumpResets", "alert jump resets", false)
+                          .toggle("legacySounds", "1.8 sounds", false)
+                          .toggle("hideAnimations", "hide animations", false)
+                          .toggle("hideArmor", "hide armor", false)
+                          .toggle("hideAllParticles", "hide crit particles", false)
+                          .toggle("hideOtherParticles", "only crit/sweep particles", false)
+                          .toggle("particlesEveryHit", "particles on every hit", false)
+                          .toggle("silenceOtherFights", "silence other fights", false)
+                          .toggle("silenceSelf", "silence your hits", false)
+                          .toggle("silenceThem", "silence their hits", false)
+                          .toggle("silenceNonHits", "silence non-hits", false)
+                          .toggle("hideOtherFights", "hide other fights", false)
+                          .toggle("renderHitbox", "render target hitbox", false)
+                          .toggle("renderCross", "render target cross", false)
+                          .toggle("RenderServerHitbox", "render server hitbox", false)
+                          .toggle("RenderApproachHitbox", "render approach hitbox", false)
+                          .toggle("RenderYourReach", "render your reach", false)
+                          .toggle("RenderTheirReach", "render their reach", false)
+                          .toggle("RenderYourJump", "render your jump range", false)
+                          .toggle("RenderTheirJump", "render their jump range", false)
+                          .toggle("PerfectHitColor", "color first tick hits", false)
+                          .toggle("JumpResetColor", "color jump resets", false)
+                          .toggle("VoidWorld", "void world", false)
+                          .toggle("CustomGround", "custom ground", false)
+                          .slider("FFB02E", "Halloween", 0, 0, 10)
+                          .slider("D9A82E", "Chinese New Year", 280707, 0, 842121)
+                          .slider("BFA7F2", "Easter", 151020, 0, 453060)
+                          .onChange((key, value) -> {
+                              // TODO: react to a setting change (value is a Boolean, Integer or Double)
+                              ctx.log("setting " + key + " = " + value);
+                          });
+                  ctx.registerMenu(menu);
+
+                  // Event 'attack' (from 1 Java hook(s))
+                  ctx.onAttack(timeMs -> {
+                      // Java: AttackMixin -> MultiPlayerGameMode.attack
+                      // TODO: port the logic here (see bytecode_notes.txt)
+                  });
+
+                  // Event 'mouse' (from 1 Java hook(s))
+                  ctx.onMouse((button, down) -> {
+                      // Java: MouseMixin -> MouseHandler.handleAccumulatedMovement/onMove
+                      // TODO: port the logic here (see bytecode_notes.txt)
+                      return false;
+                  });
+
+              }
+          }
+          MODEOF
+          mkdir -p resources
+          cat > resources/modhost-mod.properties <<'MODEOF'
+          main=converted.betterhitreg.ConvertedMod
+          id=betterhitreg
+          name=BetterHitreg
+          version=1.0.8-BETA+26.3
+          author=Jass
+          description=Clientside mod that registers hits before the server to make hitreg feel faster (use /hitreg to configure)
+          api=1
+          MODEOF
+          mkdir -p api/org/modhost
+          cat > api/org/modhost/Menu.java <<'MODEOF'
+          package org.modhost;
+
+          import java.util.ArrayList;
+          import java.util.Collections;
+          import java.util.List;
+
+          /** Describes the in-game menu module of a mod. Pass it to {@link ModContext#registerMenu}. */
+          public final class Menu {
+              /** Called when the module's on/off toggle changes. */
+              public interface ToggleListener {
+                  void onToggle(boolean enabled);
+              }
+
+              /** Called when a setting changes. The value is a Boolean, Integer or Double. */
+              public interface ChangeListener {
+                  void onChange(String key, Object value);
+              }
+
+              private final List<Setting> settings = new ArrayList<>();
+              private String name;
+              private String description = "";
+              private boolean enabled = true;
+              private ToggleListener toggleListener;
+              private ChangeListener changeListener;
+
+              public Menu(String name) {
+                  this.name = name;
+              }
+
+              public Menu description(String text) {
+                  this.description = text == null ? "" : text;
+                  return this;
+              }
+
+              /** Starting state of the module toggle. */
+              public Menu enabled(boolean value) {
+                  this.enabled = value;
+                  return this;
+              }
+
+              public Menu toggle(String key, String label, boolean defaultValue) {
+                  settings.add(new Setting(key, label, Setting.TOGGLE, String.valueOf(defaultValue), "", ""));
+                  return this;
+              }
+
+              public Menu slider(String key, String label, int defaultValue, int min, int max) {
+                  settings.add(new Setting(key, label, Setting.SLIDER, String.valueOf(defaultValue),
+                          String.valueOf(min), String.valueOf(max)));
+                  return this;
+              }
+
+              public Menu floatSlider(String key, String label, double defaultValue, double min, double max) {
+                  settings.add(new Setting(key, label, Setting.FLOAT, String.valueOf(defaultValue),
+                          String.valueOf(min), String.valueOf(max)));
+                  return this;
+              }
+
+              public Menu onToggle(ToggleListener listener) {
+                  this.toggleListener = listener;
+                  return this;
+              }
+
+              public Menu onChange(ChangeListener listener) {
+                  this.changeListener = listener;
+                  return this;
+              }
+
+              public String name() {
+                  return name;
+              }
+
+              public String description() {
+                  return description;
+              }
+
+              public boolean enabled() {
+                  return enabled;
+              }
+
+              public List<Setting> settings() {
+                  return Collections.unmodifiableList(settings);
+              }
+
+              public ToggleListener toggleListener() {
+                  return toggleListener;
+              }
+
+              public ChangeListener changeListener() {
+                  return changeListener;
+              }
+          }
+          MODEOF
+          mkdir -p api/org/modhost
+          cat > api/org/modhost/Mod.java <<'MODEOF'
+          package org.modhost;
+
+          /**
+           * Entry point of a Java mod. The jar must contain a "modhost-mod.properties" file whose
+           * "main" key names a public class implementing this interface (with a public no-argument
+           * constructor).
+           */
+          public interface Mod {
+              /** Called once after the jar is loaded. Register menus, events and timers here. */
+              void onLoad(ModContext ctx) throws Exception;
+
+              /** Called when the host stops (the game closes or the mod is disabled). */
+              default void onUnload() {}
+          }
+          MODEOF
+          mkdir -p api/org/modhost
+          cat > api/org/modhost/ModContext.java <<'MODEOF'
+          package org.modhost;
+
+          import java.io.File;
+
+          /** Everything a mod can do. Passed to {@link Mod#onLoad}. */
+          public interface ModContext {
+              /** Return true to consume the event. */
+              interface KeyHandler {
+                  boolean onKey(int keyCode, boolean down, int unicodeChar);
+              }
+
+              /** Return true to consume the event. */
+              interface TouchHandler {
+                  boolean onTouch(int action, int pointerId, float x, float y);
+              }
+
+              /** Return true to consume the event. */
+              interface MouseHandler {
+                  boolean onMouse(int button, boolean down);
+              }
+
+              /** Needs "attackEvent": true in the host's config. */
+              interface AttackHandler {
+                  void onAttack(long timeMs);
+              }
+
+              /** About 20 times a second from a host thread. This is NOT the game tick. */
+              interface TickHandler {
+                  void onTick(long dtMs);
+              }
+
+              String id();
+
+              String name();
+
+              String version();
+
+              String author();
+
+              String description();
+
+              /** Folder the jar lives in. */
+              File dir();
+
+              /** Private folder for this mod's files. */
+              File dataDir();
+
+              void log(String message);
+
+              void warn(String message);
+
+              void error(String message);
+
+              void onKey(KeyHandler handler);
+
+              void onTouch(TouchHandler handler);
+
+              void onMouse(MouseHandler handler);
+
+              void onAttack(AttackHandler handler);
+
+              void onTick(TickHandler handler);
+
+              TimerHandle after(long delayMs, Runnable task);
+
+              TimerHandle every(long periodMs, Runnable task);
+
+              /** Register the in-game menu. Call at most once, from onLoad. */
+              void registerMenu(Menu menu);
+
+              Settings settings();
+
+              Storage storage();
+
+              /** False while the module's menu toggle is off. */
+              boolean isEnabled();
+          }
+          MODEOF
+          mkdir -p api/org/modhost
+          cat > api/org/modhost/Setting.java <<'MODEOF'
+          package org.modhost;
+
+          /** One entry of a {@link Menu}. Created through the Menu helper methods. */
+          public final class Setting {
+              public static final String TOGGLE = "toggle";
+              public static final String SLIDER = "slider";
+              public static final String FLOAT = "float";
+
+              public final String key;
+              public final String label;
+              public final String type;
+              public final String defaultValue;
+              public final String min;
+              public final String max;
+
+              Setting(String key, String label, String type, String defaultValue, String min, String max) {
+                  this.key = key;
+                  this.label = label;
+                  this.type = type;
+                  this.defaultValue = defaultValue;
+                  this.min = min;
+                  this.max = max;
+              }
+          }
+          MODEOF
+          mkdir -p api/org/modhost
+          cat > api/org/modhost/Settings.java <<'MODEOF'
+          package org.modhost;
+
+          /** Current values of the settings declared in a {@link Menu}. */
+          public interface Settings {
+              boolean getBoolean(String key);
+
+              int getInt(String key);
+
+              double getDouble(String key);
+
+              String getString(String key);
+          }
+          MODEOF
+          mkdir -p api/org/modhost
+          cat > api/org/modhost/Storage.java <<'MODEOF'
+          package org.modhost;
+
+          /** Small key/value store kept between runs, private to the mod. */
+          public interface Storage {
+              String getString(String key, String defaultValue);
+
+              long getLong(String key, long defaultValue);
+
+              boolean getBoolean(String key, boolean defaultValue);
+
+              void putString(String key, String value);
+
+              void putLong(String key, long value);
+
+              void putBoolean(String key, boolean value);
+
+              void remove(String key);
+          }
+          MODEOF
+          mkdir -p api/org/modhost
+          cat > api/org/modhost/TimerHandle.java <<'MODEOF'
+          package org.modhost;
+
+          /** A scheduled task. */
+          public interface TimerHandle {
+              void cancel();
+          }
+          MODEOF
+
+      - name: Build the mod jar
+        run: |
+          set -e
+          PLATFORM_JAR="$(ls -d $ANDROID_HOME/platforms/android-*/android.jar | sort -V | tail -1)"
+          D8="$(ls -d $ANDROID_HOME/build-tools/*/d8 | sort -V | tail -1)"
+          mkdir -p build/api build/classes build/dex
+          javac --release 8 -Xlint:-options -d build/api $(find api -name '*.java')
+          javac --release 8 -Xlint:-options -cp build/api -d build/classes $(find src -name '*.java')
+          "$D8" --release --min-api 26 --lib "$PLATFORM_JAR" --classpath build/api --output build/dex $(find build/classes -name '*.class')
+          cp resources/modhost-mod.properties build/dex/
+          (cd build/dex && jar --create --file ../../betterhitreg.jar classes.dex modhost-mod.properties)
+
+      - name: Upload the mod jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: betterhitreg.jar
+          path: build/betterhitreg.jar
