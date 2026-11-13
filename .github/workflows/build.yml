@@ -1,0 +1,3080 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create project files
+        run: |
+          mkdir -p scripts src/mod java/src/org/modhost examples/java config
+          cat > CMakeLists.txt <<'SRCEOF'
+          cmake_minimum_required(VERSION 3.22)
+
+          project(mod_host LANGUAGES CXX)
+
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+          set(MOD_ID "mod_host" CACHE STRING "LeviLauncher mod package directory name")
+          set(MOD_NAME "Mod Host" CACHE STRING "LeviLauncher mod display name")
+          set(MOD_AUTHOR "you" CACHE STRING "LeviLauncher mod author")
+          set(MOD_VERSION "0.1.0" CACHE STRING "LeviLauncher mod version")
+          set(MOD_LIBRARY_NAME "mod_host" CACHE STRING "Native library name without lib prefix or .so suffix")
+          set(MOD_MINECRAFT_VERSIONS "[\"1.26.62.1\", \"1.26.62\"]" CACHE STRING "Raw JSON array for manifest minecraft_versions")
+          set(MOD_ICON "" CACHE STRING "Optional package-relative icon path, such as icon.png")
+
+          include(FetchContent)
+
+          FetchContent_Declare(
+              preloader_android
+              GIT_REPOSITORY https://github.com/LiteLDev/preloader-android.git
+              GIT_TAG 0.2.2
+              SOURCE_SUBDIR cmake/preloader-sdk
+          )
+          FetchContent_Declare(
+              nlohmann_json
+              GIT_REPOSITORY https://github.com/nlohmann/json.git
+              GIT_TAG v3.11.3
+          )
+          FetchContent_Declare(
+              boost_pfr
+              GIT_REPOSITORY https://github.com/boostorg/pfr.git
+              GIT_TAG boost-1.88.0
+          )
+          FetchContent_Declare(
+              magic_enum
+              GIT_REPOSITORY https://github.com/Neargye/magic_enum.git
+              GIT_TAG v0.9.7
+          )
+          FetchContent_Declare(
+              lua
+              URL https://www.lua.org/ftp/lua-5.4.6.tar.gz
+          )
+          FetchContent_Declare(
+              fmt
+              GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+              GIT_TAG 11.2.0
+          )
+          set(FMT_DOC OFF CACHE BOOL "Disable fmt docs" FORCE)
+          set(FMT_TEST OFF CACHE BOOL "Disable fmt tests" FORCE)
+          set(FMT_INSTALL OFF CACHE BOOL "Disable fmt install rules" FORCE)
+          FetchContent_MakeAvailable(preloader_android nlohmann_json boost_pfr magic_enum fmt lua)
+
+          # The launcher's runtime reads an extra ModuleInfo member (onKeybind) that the
+          # pinned SDK header does not have. Without this patch registerModule() reads
+          # past the end of the struct and crashes the game.
+          find_program(LEVI_PYTHON NAMES python3 python)
+          if(NOT LEVI_PYTHON)
+              message(FATAL_ERROR "python3 is required to patch the preloader SDK header")
+          endif()
+          execute_process(
+              COMMAND "${LEVI_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_sdk.py" "${preloader_android_SOURCE_DIR}"
+              RESULT_VARIABLE LEVI_SDK_PATCH_RESULT
+          )
+          if(NOT LEVI_SDK_PATCH_RESULT EQUAL 0)
+              message(FATAL_ERROR "Patching the preloader SDK header failed (see output above)")
+          endif()
+
+          FetchContent_GetProperties(preloader_android)
+          set(LEVI_PRELOADER_INCLUDE_DIR "${preloader_android_SOURCE_DIR}/include")
+
+          if(NOT ANDROID)
+              set(LEVI_GENERATED_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-config")
+
+              add_executable(levi_config_generator
+                  src/config_generator.cpp
+                  src/mod/Config.cpp
+              )
+
+              target_include_directories(levi_config_generator
+                  PRIVATE
+                      src
+                      "${LEVI_PRELOADER_INCLUDE_DIR}"
+              )
+
+              target_compile_definitions(levi_config_generator PRIVATE PL_CONFIG_NO_RUNTIME)
+              target_link_libraries(levi_config_generator PRIVATE
+                  nlohmann_json::nlohmann_json
+                  Boost::pfr
+                  magic_enum::magic_enum
+              )
+
+              add_custom_target(levi_generate_config
+                  COMMAND levi_config_generator "${LEVI_GENERATED_CONFIG_DIR}"
+                  DEPENDS levi_config_generator
+                  COMMENT "Generating config.json and config.schema.json"
+                  VERBATIM
+              )
+
+              return()
+          endif()
+
+          if(NOT DEFINED LEVI_PACKAGE_CONFIG_DIR)
+              set(LEVI_PACKAGE_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/config" CACHE PATH
+                  "Directory containing config.json and config.schema.json to package")
+          endif()
+
+          get_filename_component(LEVI_PACKAGE_CONFIG_DIR "${LEVI_PACKAGE_CONFIG_DIR}" ABSOLUTE)
+          set(LEVI_PACKAGE_CONFIG_JSON "${LEVI_PACKAGE_CONFIG_DIR}/config.json")
+          set(LEVI_PACKAGE_CONFIG_SCHEMA "${LEVI_PACKAGE_CONFIG_DIR}/config.schema.json")
+
+          if(NOT IS_DIRECTORY "${LEVI_PACKAGE_CONFIG_DIR}")
+              message(FATAL_ERROR "LEVI_PACKAGE_CONFIG_DIR must be a directory: ${LEVI_PACKAGE_CONFIG_DIR}")
+          endif()
+
+          if(NOT EXISTS "${LEVI_PACKAGE_CONFIG_JSON}")
+              message(FATAL_ERROR "LEVI_PACKAGE_CONFIG_DIR must contain config.json: ${LEVI_PACKAGE_CONFIG_JSON}")
+          endif()
+
+          if(NOT EXISTS "${LEVI_PACKAGE_CONFIG_SCHEMA}")
+              message(FATAL_ERROR "LEVI_PACKAGE_CONFIG_DIR must contain config.schema.json: ${LEVI_PACKAGE_CONFIG_SCHEMA}")
+          endif()
+
+          if(NOT CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a" AND
+             NOT CMAKE_ANDROID_ARCH_ABI STREQUAL "armeabi-v7a")
+              message(FATAL_ERROR "Unsupported Android ABI: ${CMAKE_ANDROID_ARCH_ABI}")
+          endif()
+
+          option(LEVI_LINK_PRELOADER
+                 "Build and link the preloader target instead of leaving SDK symbols for runtime lookup"
+                 ON)
+
+          if(LEVI_LINK_PRELOADER AND NOT TARGET preloader)
+              add_subdirectory("${preloader_android_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/_preloader_android")
+          endif()
+
+          # Lua is compiled as C++ so that script errors unwind like C++ exceptions and
+          # destructors in the host code run correctly.
+          file(GLOB LUA_SOURCES CONFIGURE_DEPENDS "${lua_SOURCE_DIR}/src/*.c")
+          list(FILTER LUA_SOURCES EXCLUDE REGEX "/(lua|luac)\\.c$")
+          set_source_files_properties(${LUA_SOURCES} PROPERTIES LANGUAGE CXX)
+          add_library(lua_core STATIC ${LUA_SOURCES})
+          target_include_directories(lua_core PUBLIC "${lua_SOURCE_DIR}/src")
+          set_target_properties(lua_core PROPERTIES
+              CXX_STANDARD 17
+              CXX_STANDARD_REQUIRED ON
+              POSITION_INDEPENDENT_CODE ON
+          )
+          target_compile_options(lua_core PRIVATE -w)
+
+          add_library(${MOD_LIBRARY_NAME} SHARED
+              src/main.cpp
+              src/mod/Config.cpp
+              src/mod/JavaBridge.cpp
+              src/mod/LuaHost.cpp
+              src/mod/MyMod.cpp
+          )
+
+          set_target_properties(${MOD_LIBRARY_NAME} PROPERTIES
+              OUTPUT_NAME "${MOD_LIBRARY_NAME}"
+          )
+
+          target_include_directories(${MOD_LIBRARY_NAME}
+              PRIVATE
+                  src
+                  "${LEVI_PRELOADER_INCLUDE_DIR}"
+          )
+
+          target_compile_options(${MOD_LIBRARY_NAME}
+              PRIVATE
+                  $<$<COMPILE_LANG_AND_ID:CXX,Clang,GNU>:-fvisibility=hidden -fvisibility-inlines-hidden>
+          )
+
+          target_link_options(${MOD_LIBRARY_NAME}
+              PRIVATE
+                  "-Wl,-z,max-page-size=16384"
+          )
+
+          find_library(log-lib log REQUIRED)
+          target_link_libraries(${MOD_LIBRARY_NAME} PRIVATE
+              ${log-lib}
+              ${CMAKE_DL_LIBS}
+              lua_core
+              nlohmann_json::nlohmann_json
+              Boost::pfr
+              magic_enum::magic_enum
+              fmt::fmt
+          )
+
+          if(TARGET preloader)
+              target_link_libraries(${MOD_LIBRARY_NAME} PRIVATE preloader)
+          else()
+              target_link_options(${MOD_LIBRARY_NAME} PRIVATE
+                  "-Wl,--unresolved-symbols=ignore-all")
+          endif()
+
+          if(NOT CMAKE_STRIP)
+              message(FATAL_ERROR "CMAKE_STRIP is required to strip the generated library.")
+          endif()
+
+          add_custom_command(TARGET ${MOD_LIBRARY_NAME} POST_BUILD
+              COMMAND "${CMAKE_STRIP}" --strip-unneeded "$<TARGET_FILE:${MOD_LIBRARY_NAME}>"
+              COMMENT "Stripping symbols from $<TARGET_FILE_NAME:${MOD_LIBRARY_NAME}>"
+              VERBATIM
+          )
+
+          configure_file(
+              "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json.in"
+              "${CMAKE_CURRENT_BINARY_DIR}/manifest.json"
+              @ONLY
+          )
+
+          set(LEVI_PACKAGE_ROOT "${CMAKE_CURRENT_BINARY_DIR}/package")
+          set(LEVI_PACKAGE_MOD_DIR "${LEVI_PACKAGE_ROOT}/${MOD_ID}")
+          set(LEVI_PACKAGE_FILE "${CMAKE_CURRENT_BINARY_DIR}/${MOD_ID}-${MOD_VERSION}-${CMAKE_ANDROID_ARCH_ABI}.levipack")
+          set(LEVI_PACKAGE_ICON_COMMAND)
+          set(LEVI_PACKAGE_CONFIG_COMMAND
+              COMMAND "${CMAKE_COMMAND}" -E copy_directory "${LEVI_PACKAGE_CONFIG_DIR}" "${LEVI_PACKAGE_MOD_DIR}/config")
+
+          if(NOT MOD_ICON STREQUAL "")
+              if(IS_ABSOLUTE "${MOD_ICON}")
+                  message(FATAL_ERROR "MOD_ICON must be a package-relative path")
+              endif()
+
+              if(MOD_ICON MATCHES "(^|/)\\.\\.(/|$)")
+                  message(FATAL_ERROR "MOD_ICON must not contain ..")
+              endif()
+
+              set(MOD_ICON_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${MOD_ICON}")
+              if(NOT EXISTS "${MOD_ICON_SOURCE}")
+                  message(FATAL_ERROR "MOD_ICON does not exist: ${MOD_ICON_SOURCE}")
+              endif()
+
+              get_filename_component(MOD_ICON_DIR "${MOD_ICON}" DIRECTORY)
+              if(NOT MOD_ICON_DIR STREQUAL "")
+                  list(APPEND LEVI_PACKAGE_ICON_COMMAND
+                      COMMAND "${CMAKE_COMMAND}" -E make_directory "${LEVI_PACKAGE_MOD_DIR}/${MOD_ICON_DIR}")
+              endif()
+              list(APPEND LEVI_PACKAGE_ICON_COMMAND
+                  COMMAND "${CMAKE_COMMAND}" -E copy "${MOD_ICON_SOURCE}" "${LEVI_PACKAGE_MOD_DIR}/${MOD_ICON}")
+          endif()
+
+          add_custom_target(levi_package
+              COMMAND "${CMAKE_COMMAND}" -E rm -rf "${LEVI_PACKAGE_ROOT}"
+              COMMAND "${CMAKE_COMMAND}" -E make_directory "${LEVI_PACKAGE_MOD_DIR}"
+              COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:${MOD_LIBRARY_NAME}>" "${LEVI_PACKAGE_MOD_DIR}/lib${MOD_LIBRARY_NAME}.so"
+              COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/manifest.json" "${LEVI_PACKAGE_MOD_DIR}/manifest.json"
+              ${LEVI_PACKAGE_ICON_COMMAND}
+              ${LEVI_PACKAGE_CONFIG_COMMAND}
+              COMMAND "${CMAKE_COMMAND}" -E chdir "${LEVI_PACKAGE_ROOT}" "${CMAKE_COMMAND}" -E tar "cf" "${LEVI_PACKAGE_FILE}" --format=zip "${MOD_ID}"
+              WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+              DEPENDS ${MOD_LIBRARY_NAME}
+              COMMENT "Packaging ${MOD_ID} for LeviLauncher"
+              VERBATIM
+          )
+          SRCEOF
+          cat > manifest.json.in <<'SRCEOF'
+          {
+            "type": "preload-native",
+            "name": "@MOD_NAME@",
+            "author": "@MOD_AUTHOR@",
+            "version": "@MOD_VERSION@",
+            "entry": "lib@MOD_LIBRARY_NAME@.so",
+            "icon": "@MOD_ICON@",
+            "minecraft_versions": @MOD_MINECRAFT_VERSIONS@
+          }
+          SRCEOF
+          cat > scripts/package.ps1 <<'SRCEOF'
+          param(
+              [ValidateSet("arm64-v8a", "armeabi-v7a", "all")]
+              [string]$Abi = "arm64-v8a",
+              [string]$BuildRoot = "build",
+              [string]$AndroidPlatform = "android-28",
+              [string]$NdkHome = "",
+              [string]$Generator = "Ninja"
+          )
+
+          $ErrorActionPreference = "Stop"
+
+          $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+          $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
+
+          function Invoke-ConfigGeneration {
+              $configBuildDir = Join-Path $repoRoot "$BuildRoot-config"
+
+              & cmake -S $repoRoot -B $configBuildDir -G $Generator `
+                  2>&1 |
+                  ForEach-Object { Write-Host $_ }
+
+              & cmake --build $configBuildDir --target levi_generate_config 2>&1 |
+                  ForEach-Object { Write-Host $_ }
+
+              return ((Resolve-Path (Join-Path $configBuildDir "generated-config")).Path -replace "\\", "/")
+          }
+
+          function Resolve-NdkHome {
+              if (-not [string]::IsNullOrWhiteSpace($NdkHome) -and (Test-Path $NdkHome)) {
+                  return (Resolve-Path $NdkHome).Path
+              }
+
+              if (-not [string]::IsNullOrWhiteSpace($env:ANDROID_HOME)) {
+                  $preferredNdk = Join-Path $env:ANDROID_HOME "ndk/28.2.13676358"
+                  if (Test-Path $preferredNdk) {
+                      return (Resolve-Path $preferredNdk).Path
+                  }
+
+                  $ndkRoot = Join-Path $env:ANDROID_HOME "ndk"
+                  if (Test-Path $ndkRoot) {
+                      $candidate = Get-ChildItem -Path $ndkRoot -Directory |
+                          Sort-Object Name -Descending |
+                          Select-Object -First 1
+                      if ($candidate) {
+                          return $candidate.FullName
+                      }
+                  }
+              }
+
+              if (-not [string]::IsNullOrWhiteSpace($env:ANDROID_NDK_HOME) -and (Test-Path $env:ANDROID_NDK_HOME)) {
+                  return (Resolve-Path $env:ANDROID_NDK_HOME).Path
+              }
+
+              throw "Android NDK not found. Set ANDROID_NDK_HOME or ANDROID_HOME."
+          }
+
+          function Invoke-ModBuild {
+              param([string]$TargetAbi)
+
+              $ndkHome = Resolve-NdkHome
+              $toolchain = Join-Path $ndkHome "build/cmake/android.toolchain.cmake"
+              $buildDir = Join-Path $repoRoot "$BuildRoot-$TargetAbi"
+              $generatedConfigDir = Invoke-ConfigGeneration
+
+              cmake -S $repoRoot -B $buildDir -G $Generator `
+                  -DCMAKE_TOOLCHAIN_FILE="$toolchain" `
+                  -DANDROID_ABI="$TargetAbi" `
+                  -DANDROID_PLATFORM="$AndroidPlatform" `
+                  -DANDROID_STL="c++_shared" `
+                  -DLEVI_PACKAGE_CONFIG_DIR="$generatedConfigDir"
+
+              cmake --build $buildDir --target levi_package
+          }
+
+          if ($Abi -eq "all") {
+              Invoke-ModBuild "arm64-v8a"
+              Invoke-ModBuild "armeabi-v7a"
+          } else {
+              Invoke-ModBuild $Abi
+          }
+          SRCEOF
+          cat > scripts/patch_sdk.py <<'SRCEOF'
+          #!/usr/bin/env python3
+          """Make the preloader SDK's ModuleInfo match the current LeviLauncher runtime.
+
+          SDK 0.2.2 ends ModuleInfo after onConfigChanged. Newer launchers also read an
+          onKeybind callback after it, which runs past the end of the old struct and
+          crashes inside pl::modmenu::registerModule. This appends the missing member
+          (empty = no callback) plus zeroed padding so extra trailing fields read as empty.
+          """
+          import pathlib
+          import re
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          headers = sorted(root.rglob("ModMenu.hpp"))
+          if not headers:
+              print(f"patch_sdk: ModMenu.hpp not found under {root}")
+              sys.exit(1)
+
+          path = headers[0]
+          text = path.read_text(encoding="utf-8")
+
+          if "onKeybind" in text:
+              print(f"patch_sdk: {path} already has onKeybind, nothing to do")
+              sys.exit(0)
+
+          member = re.compile(
+              r"(?:std::function<[^;{}]*?>|[\w:]+)\s+onConfigChanged\s*(?:\{\s*\}|=[^;]*)?;"
+          )
+          m = member.search(text)
+          if not m:
+              print(f"patch_sdk: could not find the onConfigChanged member in {path}")
+              for i, line in enumerate(text.splitlines(), 1):
+                  if "onConfigChanged" in line or "struct ModuleInfo" in line:
+                      print(f"  line {i}: {line}")
+              sys.exit(1)
+
+          addition = (
+              "\n    std::function<void()> onKeybind{};"
+              "\n    unsigned char abiTailPadding_[128]{};"
+          )
+          text = text[: m.end()] + addition + text[m.end():]
+          path.write_text(text, encoding="utf-8")
+          print(f"patch_sdk: patched {path}")
+          start = text.rfind("struct ModuleInfo", 0, m.end())
+          print(text[start : m.end() + len(addition) + 20] if start != -1 else "(struct not located)")
+          SRCEOF
+          cat > src/config_generator.cpp <<'SRCEOF'
+          #include "mod/Config.h"
+
+          #include <filesystem>
+          #include <fstream>
+          #include <iostream>
+
+          namespace {
+
+          bool writeJson(const std::filesystem::path &path, const nlohmann::json &value) {
+              std::error_code ec;
+              std::filesystem::create_directories(path.parent_path(), ec);
+              if (ec) {
+                  std::cerr << "Failed to create " << path.parent_path() << ": " << ec.message() << '\n';
+                  return false;
+              }
+
+              std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+              if (!stream) {
+                  std::cerr << "Failed to open " << path << '\n';
+                  return false;
+              }
+
+              stream << value.dump(2) << '\n';
+              return stream.good();
+          }
+
+          } // namespace
+
+          int main(int argc, char **argv) {
+              if (argc != 2) {
+                  std::cerr << "Usage: levi_config_generator <output-config-dir>\n";
+                  return 2;
+              }
+
+              const std::filesystem::path outputDir = argv[1];
+              if (!writeJson(outputDir / "config.json", luahost::makeDefaultConfigJson()))
+                  return 1;
+              if (!writeJson(outputDir / "config.schema.json", luahost::makeConfigSchemaJson()))
+                  return 1;
+
+              return 0;
+          }
+          SRCEOF
+          cat > src/main.cpp <<'SRCEOF'
+          #include "mod/MyMod.h"
+
+          #include <pl/Mod.hpp>
+
+          PL_REGISTER_MOD(luahost::LuaHostMod, luahost::LuaHostMod::instance());
+          SRCEOF
+          cat > src/mod/Config.h <<'SRCEOF'
+          #pragma once
+
+          #include <string>
+          #include <string_view>
+
+          #include <pl/Config.hpp>
+
+          namespace luahost {
+
+          struct ModConfig {
+              int version = 1;
+              bool enabled = true;
+              // Register an in-game menu module for every Lua mod that calls menu.register.
+              bool menuEnabled = true;
+              // Load Java mods (.jar files with classes.dex) from the java_mods folder.
+              bool javaMods = true;
+              // Run on("tick") handlers about 20 times a second from a host thread.
+              bool tickEvent = true;
+              // Longest a single Lua call may run, in milliseconds.
+              int maxScriptMs = 50;
+              // Memory cap for each Lua mod, in megabytes.
+              int maxMemoryMb = 32;
+              // Install the attack hook so Lua mods get on("attack"). Off by default
+              // because the hook target is not confirmed on every game build.
+              bool attackEvent = false;
+              // Optional override of the attack function offset (hex), e.g. "0x1009d290".
+              std::string attackRva = "";
+          };
+
+          nlohmann::json makeDefaultConfigJson();
+          nlohmann::json makeConfigSchemaJson();
+
+          } // namespace luahost
+
+          template <> struct pl::config::Schema<luahost::ModConfig> {
+              static constexpr std::string_view title = "Mod Host Config";
+              static constexpr std::string_view description = {};
+
+              static constexpr FieldSchema field(std::string_view name) {
+                  if (name == "version")
+                      return {.title = "Version", .readOnly = true};
+                  if (name == "enabled")
+                      return {.title = "Enabled", .description = "Turns Mod Host on or off."};
+                  if (name == "menuEnabled")
+                      return {.title = "In-game menu", .description = "Show a menu module for Lua mods that define settings."};
+                  if (name == "javaMods")
+                      return {.title = "Java mods", .description = "Load Java mods from the java_mods folder."};
+                  if (name == "tickEvent")
+                      return {.title = "Tick event", .description = "Run on(\"tick\") handlers about 20 times a second."};
+                  if (name == "maxScriptMs")
+                      return {.title = "Script time limit (ms)", .description = "A Lua call running longer than this is stopped."};
+                  if (name == "maxMemoryMb")
+                      return {.title = "Memory limit per mod (MB)", .description = "A Lua mod using more memory than this is stopped."};
+                  if (name == "attackEvent")
+                      return {.title = "Attack event", .description = "Hook the game's attack function so Lua mods get on(\"attack\")."};
+                  if (name == "attackRva")
+                      return {.title = "Attack RVA", .description = "Optional hex offset of the attack function, e.g. 0x1009d290."};
+                  return {};
+              }
+          };
+          SRCEOF
+          cat > src/mod/Config.cpp <<'SRCEOF'
+          #include "mod/Config.h"
+
+          namespace luahost {
+
+          nlohmann::json makeDefaultConfigJson() { return pl::config::defaultJson(ModConfig{}); }
+
+          nlohmann::json makeConfigSchemaJson() { return pl::config::schema(ModConfig{}); }
+
+          } // namespace luahost
+          SRCEOF
+          cat > src/mod/JavaBridge.h <<'SRCEOF'
+          #pragma once
+
+          #include <atomic>
+          #include <filesystem>
+          #include <functional>
+          #include <string>
+          #include <string_view>
+          #include <vector>
+
+          #include <jni.h>
+
+          #include "mod/Config.h"
+
+          #include <pl/Mod.hpp>
+
+          namespace luahost {
+
+          // Connects the game process to the Java host (org.modhost.JavaHost) through JNI.
+          class JavaBridge {
+            public:
+              // Creates the class loader that can see the bridge classes.
+              using LoaderFactory = std::function<jobject(JNIEnv *)>;
+
+              static JavaBridge &instance();
+
+              // Returns false (after logging why) when Java support is not available.
+              bool start(ll::mod::NativeMod &self, const ModConfig &config, const std::filesystem::path &modsDir,
+                         const std::filesystem::path &dataDir, const std::filesystem::path &cacheDir,
+                         const LoaderFactory &loaderFactory);
+              void stop();
+              [[nodiscard]] bool running() const { return mRunning.load(); }
+
+              bool onKey(int keyCode, bool down, unsigned int unicodeChar);
+              bool onTouch(int action, int pointerId, float x, float y);
+              bool onMouse(int button, bool down);
+              void onAttack();
+
+              // Called by the launcher's menu for modules registered by Java mods.
+              void handleToggle(std::string_view moduleId, bool enabled);
+              void handleConfigChanged(std::string_view moduleId, std::string_view key, std::string_view value);
+
+              // Called from the Java side through Native.
+              bool registerMenuFromJava(const std::string &moduleId, const std::string &name, const std::string &description,
+                                        bool enabled, const std::vector<std::string> &settings);
+              void unregisterMenuFromJava(const std::string &moduleId);
+
+              // Helper for the real game: builds an InMemoryDexClassLoader around embedded dex bytes.
+              static jobject createInMemoryDexLoader(JNIEnv *env, const unsigned char *dex, size_t size);
+
+            private:
+              JavaBridge() = default;
+
+              bool acquireVm();
+              JNIEnv *env();
+              bool checkException(JNIEnv *env, const char *where);
+              jclass loadClass(JNIEnv *env, jobject loader, const char *dottedName);
+
+              JavaVM *mVm = nullptr;
+              ll::mod::NativeMod *mSelf = nullptr;
+              std::atomic<bool> mRunning{false};
+              jclass mHost = nullptr; // global refs
+              jmethodID mOnKey = nullptr, mOnTouch = nullptr, mOnMouse = nullptr, mOnAttack = nullptr;
+              jmethodID mOnToggle = nullptr, mOnConfig = nullptr, mStop = nullptr;
+          };
+
+          } // namespace luahost
+          SRCEOF
+          cat > src/mod/JavaBridge.cpp <<'SRCEOF'
+          #include "mod/JavaBridge.h"
+
+          #include <dlfcn.h>
+
+          #include <string>
+          #include <vector>
+
+          #include <pl/ModMenu.hpp>
+
+          #include "mod/LuaHost.h"
+
+          namespace luahost {
+
+          namespace {
+
+          JavaVM *gCachedVm = nullptr;
+
+          std::string toStd(JNIEnv *env, jstring s) {
+              if (!s)
+                  return {};
+              const char *c = env->GetStringUTFChars(s, nullptr);
+              if (!c)
+                  return {};
+              std::string out(c);
+              env->ReleaseStringUTFChars(s, c);
+              return out;
+          }
+
+          // ---- native methods bound to org.modhost.Native
+
+          jboolean JNICALL nativeRegisterMenu(JNIEnv *env, jclass, jstring id, jstring name, jstring desc, jboolean enabled,
+                                              jobjectArray settings) {
+              std::vector<std::string> list;
+              if (settings) {
+                  const jsize n = env->GetArrayLength(settings);
+                  for (jsize i = 0; i < n; ++i) {
+                      jstring s = static_cast<jstring>(env->GetObjectArrayElement(settings, i));
+                      list.push_back(toStd(env, s));
+                      if (s)
+                          env->DeleteLocalRef(s);
+                  }
+              }
+              const bool ok = JavaBridge::instance().registerMenuFromJava(toStd(env, id), toStd(env, name), toStd(env, desc),
+                                                                          enabled != JNI_FALSE, list);
+              return ok ? JNI_TRUE : JNI_FALSE;
+          }
+
+          void JNICALL nativeUnregisterMenu(JNIEnv *env, jclass, jstring id) {
+              JavaBridge::instance().unregisterMenuFromJava(toStd(env, id));
+          }
+
+          void JNICALL nativeLog(JNIEnv *env, jclass, jstring level, jstring mod, jstring message) {
+              const std::string lv = toStd(env, level);
+              LuaHost::instance().log(lv.c_str(), toStd(env, mod), toStd(env, message));
+          }
+
+          // ---- menu callbacks for Java-registered modules
+
+          void javaToggleThunk(std::string_view moduleId, bool enabled) {
+              JavaBridge::instance().handleToggle(moduleId, enabled);
+          }
+
+          void javaConfigThunk(std::string_view moduleId, std::string_view key, std::string_view value) {
+              JavaBridge::instance().handleConfigChanged(moduleId, key, value);
+          }
+
+          // Attach the change callback only if this SDK's builder accepts one with this shape.
+          template <class B> bool attachConfigCallback(B &builder) {
+              if constexpr (requires { builder.onConfigChanged(&javaConfigThunk); }) {
+                  builder.onConfigChanged(&javaConfigThunk);
+                  return true;
+              } else {
+                  return false;
+              }
+          }
+
+          struct MenuEntry {
+              std::string key, label, type, value, min, max;
+          };
+
+          std::vector<std::string> splitUnit(const std::string &s) {
+              std::vector<std::string> parts;
+              std::string cur;
+              for (char c : s) {
+                  if (c == '\x1f') {
+                      parts.push_back(cur);
+                      cur.clear();
+                  } else {
+                      cur += c;
+                  }
+              }
+              parts.push_back(cur);
+              return parts;
+          }
+
+          } // namespace
+
+          extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
+              gCachedVm = vm;
+              return JNI_VERSION_1_6;
+          }
+
+          JavaBridge &JavaBridge::instance() {
+              static JavaBridge *bridge = new JavaBridge(); // intentionally never destroyed
+              return *bridge;
+          }
+
+          bool JavaBridge::acquireVm() {
+              if (mVm)
+                  return true;
+              if (gCachedVm) {
+                  mVm = gCachedVm;
+                  return true;
+              }
+              using GetVmsFn = jint (*)(JavaVM **, jsize, jsize *);
+              auto fn = reinterpret_cast<GetVmsFn>(dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+              if (!fn)
+                  return false;
+              JavaVM *vm = nullptr;
+              jsize count = 0;
+              if (fn(&vm, 1, &count) != JNI_OK || count < 1 || !vm)
+                  return false;
+              mVm = vm;
+              return true;
+          }
+
+          JNIEnv *JavaBridge::env() {
+              if (!mVm)
+                  return nullptr;
+              JNIEnv *e = nullptr;
+              const jint r = mVm->GetEnv(reinterpret_cast<void **>(&e), JNI_VERSION_1_6);
+              if (r == JNI_OK)
+                  return e;
+              if (r == JNI_EDETACHED) {
+          #ifdef __ANDROID__
+                  if (mVm->AttachCurrentThread(&e, nullptr) == JNI_OK)
+                      return e;
+          #else
+                  if (mVm->AttachCurrentThread(reinterpret_cast<void **>(&e), nullptr) == JNI_OK)
+                      return e;
+          #endif
+              }
+              return nullptr;
+          }
+
+          bool JavaBridge::checkException(JNIEnv *e, const char *where) {
+              if (!e->ExceptionCheck())
+                  return false;
+              jthrowable t = e->ExceptionOccurred();
+              e->ExceptionClear();
+              std::string text = "(unknown Java exception)";
+              if (t) {
+                  jclass thr = e->FindClass("java/lang/Throwable");
+                  if (thr) {
+                      jmethodID toString = e->GetMethodID(thr, "toString", "()Ljava/lang/String;");
+                      if (toString) {
+                          jstring js = static_cast<jstring>(e->CallObjectMethod(t, toString));
+                          if (!e->ExceptionCheck()) {
+                              text = toStd(e, js);
+                              if (js)
+                                  e->DeleteLocalRef(js);
+                          } else {
+                              e->ExceptionClear();
+                          }
+                      }
+                      e->DeleteLocalRef(thr);
+                  }
+                  e->DeleteLocalRef(t);
+              }
+              LuaHost::instance().log("ERROR", "java", std::string(where) + ": " + text);
+              return true;
+          }
+
+          jclass JavaBridge::loadClass(JNIEnv *e, jobject loader, const char *dottedName) {
+              jclass clClass = e->FindClass("java/lang/ClassLoader");
+              if (!clClass) {
+                  checkException(e, "ClassLoader lookup");
+                  return nullptr;
+              }
+              jmethodID load = e->GetMethodID(clClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+              jstring name = e->NewStringUTF(dottedName);
+              jobject cls = load ? e->CallObjectMethod(loader, load, name) : nullptr;
+              e->DeleteLocalRef(name);
+              e->DeleteLocalRef(clClass);
+              if (checkException(e, dottedName))
+                  return nullptr;
+              return static_cast<jclass>(cls);
+          }
+
+          jobject JavaBridge::createInMemoryDexLoader(JNIEnv *e, const unsigned char *dex, size_t size) {
+              if (!dex || size == 0)
+                  return nullptr;
+              jclass clClass = e->FindClass("java/lang/ClassLoader");
+              jmethodID getSystem = clClass ? e->GetStaticMethodID(clClass, "getSystemClassLoader", "()Ljava/lang/ClassLoader;")
+                                            : nullptr;
+              jobject parent = getSystem ? e->CallStaticObjectMethod(clClass, getSystem) : nullptr;
+              jobject buffer = e->NewDirectByteBuffer(const_cast<unsigned char *>(dex), static_cast<jlong>(size));
+              jclass loaderClass = e->FindClass("dalvik/system/InMemoryDexClassLoader");
+              jobject loader = nullptr;
+              if (loaderClass && buffer) {
+                  jmethodID ctor = e->GetMethodID(loaderClass, "<init>", "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V");
+                  if (ctor)
+                      loader = e->NewObject(loaderClass, ctor, buffer, parent);
+              }
+              if (e->ExceptionCheck())
+                  e->ExceptionClear();
+              if (loaderClass)
+                  e->DeleteLocalRef(loaderClass);
+              if (buffer)
+                  e->DeleteLocalRef(buffer);
+              if (parent)
+                  e->DeleteLocalRef(parent);
+              if (clClass)
+                  e->DeleteLocalRef(clClass);
+              return loader;
+          }
+
+          bool JavaBridge::start(ll::mod::NativeMod &self, const ModConfig &config, const std::filesystem::path &modsDir,
+                                 const std::filesystem::path &dataDir, const std::filesystem::path &cacheDir,
+                                 const LoaderFactory &loaderFactory) {
+              LuaHost &host = LuaHost::instance();
+              if (mRunning.load())
+                  return true;
+              mSelf = &self;
+              if (!acquireVm()) {
+                  host.log("WARN", "java", "Java mods unavailable: could not find the Java VM");
+                  return false;
+              }
+              JNIEnv *e = env();
+              if (!e) {
+                  host.log("WARN", "java", "Java mods unavailable: could not attach to the Java VM");
+                  return false;
+              }
+              jobject loader = loaderFactory ? loaderFactory(e) : nullptr;
+              if (checkException(e, "creating the class loader") || !loader) {
+                  host.log("ERROR", "java", "Java mods unavailable: could not create the class loader (needs Android 8+ and the bridge dex)");
+                  return false;
+              }
+              jclass hostLocal = loadClass(e, loader, "org.modhost.JavaHost");
+              jclass nativeCls = loadClass(e, loader, "org.modhost.Native");
+              if (!hostLocal || !nativeCls) {
+                  host.log("ERROR", "java", "Java mods unavailable: bridge classes not found");
+                  return false;
+              }
+
+              JNINativeMethod methods[3];
+              methods[0] = {const_cast<char *>("registerMenu0"),
+                            const_cast<char *>("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z[Ljava/lang/String;)Z"),
+                            reinterpret_cast<void *>(&nativeRegisterMenu)};
+              methods[1] = {const_cast<char *>("unregisterMenu0"), const_cast<char *>("(Ljava/lang/String;)V"),
+                            reinterpret_cast<void *>(&nativeUnregisterMenu)};
+              methods[2] = {const_cast<char *>("log0"),
+                            const_cast<char *>("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+                            reinterpret_cast<void *>(&nativeLog)};
+              if (e->RegisterNatives(nativeCls, methods, 3) != JNI_OK || checkException(e, "RegisterNatives")) {
+                  host.log("ERROR", "java", "Java mods unavailable: could not bind native methods");
+                  return false;
+              }
+
+              mHost = static_cast<jclass>(e->NewGlobalRef(hostLocal));
+              mOnKey = e->GetStaticMethodID(mHost, "onKey", "(IZI)Z");
+              mOnTouch = e->GetStaticMethodID(mHost, "onTouch", "(IIFF)Z");
+              mOnMouse = e->GetStaticMethodID(mHost, "onMouse", "(IZ)Z");
+              mOnAttack = e->GetStaticMethodID(mHost, "onAttack", "()V");
+              mOnToggle = e->GetStaticMethodID(mHost, "onToggle", "(Ljava/lang/String;Z)V");
+              mOnConfig = e->GetStaticMethodID(mHost, "onConfigChanged",
+                                               "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+              mStop = e->GetStaticMethodID(mHost, "stop", "()V");
+              jmethodID setApi = e->GetStaticMethodID(mHost, "setNativeApi", "(Lorg/modhost/NativeApi;)V");
+              jmethodID startId = e->GetStaticMethodID(mHost, "start",
+                                                       "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V");
+              jmethodID nativeCtor = e->GetMethodID(nativeCls, "<init>", "()V");
+              if (checkException(e, "looking up Java methods") || !mOnKey || !mOnTouch || !mOnMouse || !mOnAttack ||
+                  !mOnToggle || !mOnConfig || !mStop || !setApi || !startId || !nativeCtor) {
+                  host.log("ERROR", "java", "Java mods unavailable: bridge classes do not match this build");
+                  e->DeleteGlobalRef(mHost);
+                  mHost = nullptr;
+                  return false;
+              }
+
+              jobject nativeObj = e->NewObject(nativeCls, nativeCtor);
+              e->CallStaticVoidMethod(mHost, setApi, nativeObj);
+              e->DeleteLocalRef(nativeObj);
+
+              jstring jMods = e->NewStringUTF(modsDir.string().c_str());
+              jstring jData = e->NewStringUTF(dataDir.string().c_str());
+              jstring jCache = e->NewStringUTF(cacheDir.string().c_str());
+              e->CallStaticVoidMethod(mHost, startId, jMods, jData, jCache, config.tickEvent ? JNI_TRUE : JNI_FALSE);
+              e->DeleteLocalRef(jMods);
+              e->DeleteLocalRef(jData);
+              e->DeleteLocalRef(jCache);
+              e->DeleteLocalRef(hostLocal);
+              e->DeleteLocalRef(nativeCls);
+              e->DeleteLocalRef(loader);
+              if (checkException(e, "starting the Java host")) {
+                  mRunning = true; // let stop() clean up whatever did load
+                  stop();
+                  return false;
+              }
+              mRunning = true;
+              host.log("INFO", "java", "Java host running");
+              return true;
+          }
+
+          void JavaBridge::stop() {
+              if (!mRunning.exchange(false))
+                  return;
+              JNIEnv *e = env();
+              if (e && mHost && mStop) {
+                  e->CallStaticVoidMethod(mHost, mStop);
+                  checkException(e, "stopping the Java host");
+                  e->DeleteGlobalRef(mHost);
+              }
+              mHost = nullptr;
+          }
+
+          bool JavaBridge::onKey(int keyCode, bool down, unsigned int unicodeChar) {
+              if (!mRunning.load())
+                  return false;
+              JNIEnv *e = env();
+              if (!e)
+                  return false;
+              const jboolean r = e->CallStaticBooleanMethod(mHost, mOnKey, static_cast<jint>(keyCode),
+                                                            down ? JNI_TRUE : JNI_FALSE, static_cast<jint>(unicodeChar));
+              if (checkException(e, "key event"))
+                  return false;
+              return r != JNI_FALSE;
+          }
+
+          bool JavaBridge::onTouch(int action, int pointerId, float x, float y) {
+              if (!mRunning.load())
+                  return false;
+              JNIEnv *e = env();
+              if (!e)
+                  return false;
+              const jboolean r = e->CallStaticBooleanMethod(mHost, mOnTouch, static_cast<jint>(action),
+                                                            static_cast<jint>(pointerId), static_cast<jdouble>(x),
+                                                            static_cast<jdouble>(y));
+              if (checkException(e, "touch event"))
+                  return false;
+              return r != JNI_FALSE;
+          }
+
+          bool JavaBridge::onMouse(int button, bool down) {
+              if (!mRunning.load())
+                  return false;
+              JNIEnv *e = env();
+              if (!e)
+                  return false;
+              const jboolean r =
+                  e->CallStaticBooleanMethod(mHost, mOnMouse, static_cast<jint>(button), down ? JNI_TRUE : JNI_FALSE);
+              if (checkException(e, "mouse event"))
+                  return false;
+              return r != JNI_FALSE;
+          }
+
+          void JavaBridge::onAttack() {
+              if (!mRunning.load())
+                  return;
+              JNIEnv *e = env();
+              if (!e)
+                  return;
+              e->CallStaticVoidMethod(mHost, mOnAttack);
+              checkException(e, "attack event");
+          }
+
+          void JavaBridge::handleToggle(std::string_view moduleId, bool enabled) {
+              JNIEnv *e = env();
+              if (!e || !mHost)
+                  return;
+              jstring id = e->NewStringUTF(std::string(moduleId).c_str());
+              e->CallStaticVoidMethod(mHost, mOnToggle, id, enabled ? JNI_TRUE : JNI_FALSE);
+              e->DeleteLocalRef(id);
+              checkException(e, "menu toggle");
+          }
+
+          void JavaBridge::handleConfigChanged(std::string_view moduleId, std::string_view key, std::string_view value) {
+              JNIEnv *e = env();
+              if (!e || !mHost)
+                  return;
+              jstring id = e->NewStringUTF(std::string(moduleId).c_str());
+              jstring k = e->NewStringUTF(std::string(key).c_str());
+              jstring v = e->NewStringUTF(std::string(value).c_str());
+              e->CallStaticVoidMethod(mHost, mOnConfig, id, k, v);
+              e->DeleteLocalRef(id);
+              e->DeleteLocalRef(k);
+              e->DeleteLocalRef(v);
+              checkException(e, "menu change");
+          }
+
+          bool JavaBridge::registerMenuFromJava(const std::string &moduleId, const std::string &name,
+                                                const std::string &description, bool enabled,
+                                                const std::vector<std::string> &settings) {
+              LuaHost &host = LuaHost::instance();
+              if (!mSelf)
+                  return false;
+              if (host.guardTripped("java_menu.pending")) {
+                  host.log("WARN", "java", "The menu crashed the game last time; skipping it. Delete java_menu.pending in the mod's data folder to retry.");
+                  return false;
+              }
+              host.guardSet("java_menu.pending");
+
+              std::vector<MenuEntry> entries;
+              for (const std::string &line : settings) {
+                  const std::vector<std::string> p = splitUnit(line);
+                  if (p.size() < 6)
+                      continue;
+                  entries.push_back({p[0], p[1], p[2], p[3], p[4], p[5]});
+              }
+
+              pl::modmenu::ModuleBuilder builder(moduleId.c_str(), name.c_str());
+              builder.modId(mSelf->getId());
+              builder.description(description.c_str());
+              builder.defaultEnabled(enabled);
+              builder.onToggle(&javaToggleThunk);
+              for (const MenuEntry &s : entries) {
+                  if (s.type == "toggle") {
+                      builder.config(s.key.c_str(), s.label.c_str(), pl::modmenu::ConfigType::Toggle, s.value.c_str());
+                  } else {
+                      builder.config(s.key.c_str(), s.label.c_str(),
+                                     s.type == "slider" ? pl::modmenu::ConfigType::SliderInt
+                                                        : pl::modmenu::ConfigType::SliderFloat,
+                                     s.value.c_str(), s.min.c_str(), s.max.c_str());
+                  }
+              }
+              if (!attachConfigCallback(builder))
+                  host.log("WARN", "java", "this SDK has no menu change callback; menu edits will not reach Java mods");
+              const bool ok = builder.registerModule();
+              host.guardClear("java_menu.pending");
+              return ok;
+          }
+
+          void JavaBridge::unregisterMenuFromJava(const std::string &moduleId) {
+              pl::modmenu::unregisterModule(moduleId.c_str());
+          }
+
+          } // namespace luahost
+          SRCEOF
+          cat > src/mod/LuaHost.h <<'SRCEOF'
+          #pragma once
+
+          #include <array>
+          #include <atomic>
+          #include <cstdint>
+          #include <filesystem>
+          #include <fstream>
+          #include <functional>
+          #include <memory>
+          #include <mutex>
+          #include <string>
+          #include <string_view>
+          #include <thread>
+          #include <vector>
+
+          #include "mod/Config.h"
+
+          #include <pl/Mod.hpp>
+
+          struct lua_State;
+
+          namespace luahost {
+
+          struct LuaMod;
+
+          // Loads Lua mods from a folder and runs them in sandboxed Lua states.
+          class LuaHost {
+            public:
+              static LuaHost &instance();
+
+              void start(ll::mod::NativeMod &self, const ModConfig &config);
+              void stop();
+              [[nodiscard]] bool running() const { return mRunning.load(); }
+              [[nodiscard]] const std::filesystem::path &extDir() const { return mExtDir; }
+              [[nodiscard]] const std::filesystem::path &dataDir() const { return mDataDir; }
+
+              // Events. Key, touch and mouse return true when a Lua handler consumed the event.
+              bool onKey(int keyCode, bool down, unsigned int unicodeChar);
+              bool onTouch(int action, int pointerId, float x, float y);
+              bool onMouse(int button, bool down);
+              void onAttack();
+
+              // Called by the launcher's menu.
+              void handleToggle(std::string_view moduleId, bool enabled);
+              void handleConfigChanged(std::string_view moduleId, std::string_view key, std::string_view value);
+
+              // Used by the Lua API functions.
+              void log(const char *level, const std::string &modId, const std::string &message);
+              void noteHandler(const std::string &event);
+              void saveStorage(LuaMod &mod);
+              void prepareSettings(LuaMod &mod);
+
+              // Crash-loop breaker: a ".pending" file written before risky work and removed
+              // afterwards. If it is still there next start, that work crashed the game.
+              bool guardTripped(const char *name);
+              void guardSet(const char *name);
+              void guardClear(const char *name);
+
+            private:
+              LuaHost();
+
+              enum EventId { EvAttack = 0, EvKey, EvMouse, EvTouch, EvTick, EvCount };
+              static int eventIndex(std::string_view name);
+
+              void resolveDirs();
+              void openLog();
+              void scanAndLoad();
+              void loadMod(const std::filesystem::path &mainFile, const std::filesystem::path &dir, bool single,
+                           const std::string &defaultId);
+              void loadStorage(LuaMod &mod);
+              void recountHandlers();
+              void registerMenus();
+              LuaMod *findByModuleId(std::string_view moduleId);
+              bool dispatch(const char *event, const std::function<int(lua_State *)> &pushArgs);
+              void runTimers(int64_t now);
+              void threadMain();
+
+              std::recursive_mutex mMutex;
+              std::mutex mLogMutex;
+              std::atomic<bool> mRunning{false};
+              std::thread mThread;
+              ll::mod::NativeMod *mSelf = nullptr;
+              ModConfig mConfig;
+              std::filesystem::path mDataDir, mExtDir, mModsDir;
+              std::ofstream mLogFile;
+              std::vector<std::unique_ptr<LuaMod>> mMods;
+              std::array<std::atomic<int>, EvCount> mHandlerCounts;
+          };
+
+          } // namespace luahost
+          SRCEOF
+          cat > src/mod/LuaHost.cpp <<'SRCEOF'
+          #include "mod/LuaHost.h"
+
+          #include <algorithm>
+          #include <cctype>
+          #include <chrono>
+          #include <cmath>
+          #include <cstdio>
+          #include <cstdlib>
+          #include <fstream>
+          #include <map>
+          #include <string>
+
+          #include <nlohmann/json.hpp>
+          #include <pl/ModMenu.hpp>
+
+          #include "lauxlib.h"
+          #include "lua.h"
+          #include "lualib.h"
+
+          namespace luahost {
+
+          namespace fs = std::filesystem;
+
+          namespace {
+
+          // Change when the build changes so old crash markers stop applying.
+          constexpr const char *kGuardTag = "luahost1-2026-11-09";
+
+          int64_t nowMs() {
+              return std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                  .count();
+          }
+
+          std::string sanitizeId(const std::string &s) {
+              std::string out;
+              for (char c : s) {
+                  const unsigned char u = static_cast<unsigned char>(c);
+                  if (std::isalnum(u))
+                      out += static_cast<char>(std::tolower(u));
+                  else if (c == '_' || c == '-' || c == '.')
+                      out += c;
+                  else
+                      out += '_';
+              }
+              return out.empty() ? std::string("mod") : out;
+          }
+
+          bool parseBool(std::string_view v) { return v == "true" || v == "1" || v == "on"; }
+
+          std::string formatNumber(double v) {
+              char buf[64];
+              if (std::floor(v) == v && std::fabs(v) < 1e15)
+                  std::snprintf(buf, sizeof buf, "%lld", static_cast<long long>(v));
+              else
+                  std::snprintf(buf, sizeof buf, "%g", v);
+              return buf;
+          }
+
+          } // namespace
+
+          struct SettingDef {
+              std::string key, label, type; // type: toggle | slider | float
+              std::string defValue, minValue, maxValue;
+          };
+
+          struct TimerEntry {
+              int id = 0;
+              int ref = LUA_NOREF;
+              int64_t nextMs = 0;
+              int64_t intervalMs = 0;
+              bool repeat = false;
+          };
+
+          struct LuaMod {
+              std::string id, name, version = "0.0.0", author, description;
+              fs::path dir, mainFile, storageFile;
+              bool singleFile = false;
+
+              lua_State *L = nullptr;
+              size_t memUsed = 0, memLimit = 0;
+              int maxMs = 50;
+              int64_t callStartMs = 0;
+              int errors = 0;
+              bool failed = false;
+              bool moduleEnabled = true;
+
+              // Menu definition (from menu.register).
+              bool hasMenu = false, menuRegistered = false;
+              std::string moduleId, menuName, menuDesc;
+              bool menuDefaultEnabled = true;
+              std::vector<SettingDef> settings;
+              std::map<std::string, std::string> values;
+              int onToggleRef = LUA_NOREF, onChangeRef = LUA_NOREF;
+
+              std::map<std::string, std::vector<int>> handlers;
+              std::vector<TimerEntry> timers;
+              int nextTimerId = 1;
+
+              nlohmann::json storage = nlohmann::json::object();
+          };
+
+          namespace {
+
+          // ---------------------------------------------------------------- Lua plumbing
+
+          LuaMod *modOf(lua_State *L) {
+              void *ud = nullptr;
+              lua_getallocf(L, &ud);
+              return static_cast<LuaMod *>(ud);
+          }
+
+          // Allocator that enforces the per-mod memory limit.
+          void *luaAlloc(void *ud, void *ptr, size_t osize, size_t nsize) {
+              auto *m = static_cast<LuaMod *>(ud);
+              if (nsize == 0) {
+                  if (ptr)
+                      m->memUsed -= osize;
+                  std::free(ptr);
+                  return nullptr;
+              }
+              const size_t old = ptr ? osize : 0;
+              if (nsize > old && m->memUsed + (nsize - old) > m->memLimit)
+                  return nullptr;
+              void *np = std::realloc(ptr, nsize);
+              if (np)
+                  m->memUsed = m->memUsed - old + nsize;
+              return np;
+          }
+
+          // Stops scripts that run too long.
+          void timeHook(lua_State *L, lua_Debug *) {
+              LuaMod *m = modOf(L);
+              if (nowMs() - m->callStartMs > m->maxMs)
+                  luaL_error(L, "script ran longer than %d ms", m->maxMs);
+          }
+
+          int traceback(lua_State *L) {
+              const char *msg = lua_tostring(L, 1);
+              if (msg == nullptr) {
+                  if (luaL_callmeta(L, 1, "__tostring") && lua_type(L, -1) == LUA_TSTRING)
+                      return 1;
+                  msg = lua_pushfstring(L, "(error object is a %s value)", luaL_typename(L, 1));
+              }
+              luaL_traceback(L, L, msg, 1);
+              return 1;
+          }
+
+          // Calls the function sitting below `nargs` arguments on the stack.
+          bool callTop(LuaMod &m, int nargs, int nresults) {
+              lua_State *L = m.L;
+              const int base = lua_gettop(L) - nargs;
+              lua_pushcfunction(L, traceback);
+              lua_insert(L, base);
+              m.callStartMs = nowMs();
+              const int rc = lua_pcall(L, nargs, nresults, base);
+              lua_remove(L, base);
+              if (rc != LUA_OK) {
+                  const char *msg = lua_tostring(L, -1);
+                  LuaHost::instance().log("ERROR", m.id, msg ? msg : "(error object)");
+                  lua_pop(L, 1);
+                  if (++m.errors >= 5 && !m.failed) {
+                      m.failed = true;
+                      LuaHost::instance().log("ERROR", m.id, "stopped after too many errors");
+                  }
+                  return false;
+              }
+              return true;
+          }
+
+          void pushSettingValue(lua_State *L, const SettingDef &s, const std::string &v) {
+              if (s.type == "toggle") {
+                  lua_pushboolean(L, parseBool(v));
+              } else {
+                  const double d = std::strtod(v.c_str(), nullptr);
+                  if (s.type == "slider")
+                      lua_pushinteger(L, static_cast<lua_Integer>(d));
+                  else
+                      lua_pushnumber(L, d);
+              }
+          }
+
+          void pushJson(lua_State *L, const nlohmann::json &j) {
+              if (j.is_boolean())
+                  lua_pushboolean(L, j.get<bool>());
+              else if (j.is_number_integer())
+                  lua_pushinteger(L, static_cast<lua_Integer>(j.get<long long>()));
+              else if (j.is_number())
+                  lua_pushnumber(L, j.get<double>());
+              else if (j.is_string()) {
+                  const std::string s = j.get<std::string>();
+                  lua_pushlstring(L, s.data(), s.size());
+              } else
+                  lua_pushnil(L);
+          }
+
+          // ---------------------------------------------------------------- Lua API
+
+          std::string joinArgs(lua_State *L) {
+              const int n = lua_gettop(L);
+              std::string out;
+              for (int i = 1; i <= n; ++i) {
+                  size_t len = 0;
+                  const char *s = luaL_tolstring(L, i, &len);
+                  if (i > 1)
+                      out += ' ';
+                  out.append(s, len);
+                  lua_pop(L, 1);
+              }
+              return out;
+          }
+
+          int l_logInfo(lua_State *L) {
+              LuaHost::instance().log("INFO", modOf(L)->id, joinArgs(L));
+              return 0;
+          }
+          int l_logWarn(lua_State *L) {
+              LuaHost::instance().log("WARN", modOf(L)->id, joinArgs(L));
+              return 0;
+          }
+          int l_logError(lua_State *L) {
+              LuaHost::instance().log("ERROR", modOf(L)->id, joinArgs(L));
+              return 0;
+          }
+
+          int l_on(lua_State *L) {
+              LuaMod *m = modOf(L);
+              const std::string event = luaL_checkstring(L, 1);
+              luaL_checktype(L, 2, LUA_TFUNCTION);
+              if (event != "attack" && event != "key" && event != "mouse" && event != "touch" && event != "tick")
+                  return luaL_error(L, "unknown event '%s' (use attack, key, mouse, touch or tick)", event.c_str());
+              if (m->handlers[event].size() >= 64)
+                  return luaL_error(L, "too many handlers for '%s'", event.c_str());
+              lua_pushvalue(L, 2);
+              const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+              m->handlers[event].push_back(ref);
+              LuaHost::instance().noteHandler(event);
+              return 0;
+          }
+
+          std::string tableString(lua_State *L, int idx, const char *key, const std::string &def) {
+              lua_getfield(L, idx, key);
+              std::string v = def;
+              if (lua_type(L, -1) == LUA_TSTRING || lua_type(L, -1) == LUA_TNUMBER) {
+                  size_t len = 0;
+                  const char *s = lua_tolstring(L, -1, &len);
+                  v.assign(s, len);
+              }
+              lua_pop(L, 1);
+              return v;
+          }
+
+          // Reads a number/boolean/string field as the text the menu expects.
+          std::string tableValueText(lua_State *L, int idx, const char *key, const std::string &def) {
+              lua_getfield(L, idx, key);
+              std::string v = def;
+              if (lua_type(L, -1) == LUA_TBOOLEAN)
+                  v = lua_toboolean(L, -1) ? "true" : "false";
+              else if (lua_type(L, -1) == LUA_TNUMBER)
+                  v = formatNumber(lua_tonumber(L, -1));
+              else if (lua_type(L, -1) == LUA_TSTRING)
+                  v = lua_tostring(L, -1);
+              lua_pop(L, 1);
+              return v;
+          }
+
+          bool validKey(const std::string &k) {
+              if (k.empty() || k.size() > 64)
+                  return false;
+              for (char c : k)
+                  if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_'))
+                      return false;
+              return true;
+          }
+
+          int l_menuRegister(lua_State *L) {
+              LuaMod *m = modOf(L);
+              luaL_checktype(L, 1, LUA_TTABLE);
+              if (m->hasMenu)
+          return luaL_error(L, "menu.register can only be called once per mod");
+
+              m->menuName = tableString(L, 1, "name", m->name.empty() ? m->id : m->name);
+              m->menuDesc = tableString(L, 1, "description", m->description);
+              lua_getfield(L, 1, "enabled");
+              m->menuDefaultEnabled = lua_isnil(L, -1) ? true : (lua_toboolean(L, -1) != 0);
+              lua_pop(L, 1);
+
+              lua_getfield(L, 1, "settings");
+              if (lua_istable(L, -1)) {
+                  const int n = static_cast<int>(luaL_len(L, -1));
+                  for (int i = 1; i <= n && m->settings.size() < 64; ++i) {
+                      lua_rawgeti(L, -1, i);
+                      if (lua_istable(L, -1)) {
+                          SettingDef s;
+                          s.key = tableString(L, -1, "key", "");
+                          s.label = tableString(L, -1, "label", s.key);
+                          s.type = tableString(L, -1, "type", "toggle");
+                          if (s.type != "toggle" && s.type != "slider" && s.type != "float")
+                              s.type = "toggle";
+                          if (s.type == "toggle") {
+                              s.defValue = tableValueText(L, -1, "default", "false");
+                              if (s.defValue != "true")
+                                  s.defValue = "false";
+                          } else {
+                              s.defValue = tableValueText(L, -1, "default", "0");
+                              s.minValue = tableValueText(L, -1, "min", "0");
+                              s.maxValue = tableValueText(L, -1, "max", "100");
+                          }
+                          if (validKey(s.key))
+                              m->settings.push_back(s);
+                          else
+                              LuaHost::instance().log("WARN", m->id, "skipped a setting with an invalid key");
+                      }
+                      lua_pop(L, 1);
+                  }
+              }
+              lua_pop(L, 1);
+
+              lua_getfield(L, 1, "on_toggle");
+              if (lua_isfunction(L, -1))
+                  m->onToggleRef = luaL_ref(L, LUA_REGISTRYINDEX);
+              else
+                  lua_pop(L, 1);
+              lua_getfield(L, 1, "on_change");
+              if (lua_isfunction(L, -1))
+                  m->onChangeRef = luaL_ref(L, LUA_REGISTRYINDEX);
+              else
+                  lua_pop(L, 1);
+
+              m->hasMenu = true;
+              LuaHost::instance().prepareSettings(*m);
+              return 0;
+          }
+
+          int l_storageGet(lua_State *L) {
+              LuaMod *m = modOf(L);
+              const std::string key = luaL_checkstring(L, 1);
+              const nlohmann::json &user = m->storage["user"];
+              if (user.is_object() && user.contains(key)) {
+                  pushJson(L, user[key]);
+                  return 1;
+              }
+              if (lua_gettop(L) >= 2)
+                  lua_pushvalue(L, 2);
+              else
+                  lua_pushnil(L);
+              return 1;
+          }
+
+          int l_storageSet(lua_State *L) {
+              LuaMod *m = modOf(L);
+              const std::string key = luaL_checkstring(L, 1);
+              if (key.empty() || key.size() > 128)
+                  return luaL_error(L, "bad storage key");
+              nlohmann::json &user = m->storage["user"];
+              if (!user.is_object())
+                  user = nlohmann::json::object();
+              switch (lua_type(L, 2)) {
+              case LUA_TNIL:
+              case LUA_TNONE:
+                  user.erase(key);
+                  break;
+              case LUA_TBOOLEAN:
+                  user[key] = (lua_toboolean(L, 2) != 0);
+                  break;
+              case LUA_TNUMBER:
+                  if (lua_isinteger(L, 2))
+                      user[key] = static_cast<long long>(lua_tointeger(L, 2));
+                  else
+                      user[key] = static_cast<double>(lua_tonumber(L, 2));
+                  break;
+              case LUA_TSTRING: {
+                  size_t len = 0;
+                  const char *s = lua_tolstring(L, 2, &len);
+                  if (len > 65536)
+                      return luaL_error(L, "storage value too long");
+                  user[key] = std::string(s, len);
+                  break;
+              }
+              default:
+                  return luaL_error(L, "storage can only hold booleans, numbers and strings");
+              }
+              LuaHost::instance().saveStorage(*m);
+              return 0;
+          }
+
+          int addTimer(lua_State *L, bool repeat) {
+              LuaMod *m = modOf(L);
+              lua_Number ms = luaL_checknumber(L, 1);
+              luaL_checktype(L, 2, LUA_TFUNCTION);
+              if (m->timers.size() >= 200)
+                  return luaL_error(L, "too many timers");
+              if (ms < 10)
+                  ms = 10;
+              lua_pushvalue(L, 2);
+              TimerEntry t;
+              t.id = m->nextTimerId++;
+              t.ref = luaL_ref(L, LUA_REGISTRYINDEX);
+              t.intervalMs = static_cast<int64_t>(ms);
+              t.nextMs = nowMs() + t.intervalMs;
+              t.repeat = repeat;
+              m->timers.push_back(t);
+              lua_pushinteger(L, t.id);
+              return 1;
+          }
+
+          int l_timerAfter(lua_State *L) { return addTimer(L, false); }
+          int l_timerEvery(lua_State *L) { return addTimer(L, true); }
+
+          int l_timerCancel(lua_State *L) {
+              LuaMod *m = modOf(L);
+              const int id = static_cast<int>(luaL_checkinteger(L, 1));
+              auto it = std::find_if(m->timers.begin(), m->timers.end(), [&](const TimerEntry &t) { return t.id == id; });
+              if (it != m->timers.end()) {
+                  luaL_unref(L, LUA_REGISTRYINDEX, it->ref);
+                  m->timers.erase(it);
+              }
+              return 0;
+          }
+
+          int l_timeMs(lua_State *L) {
+              lua_pushinteger(L, static_cast<lua_Integer>(nowMs()));
+              return 1;
+          }
+
+          // require("name") loads <mod folder>/name.lua (folder mods only).
+          int l_require(lua_State *L) {
+              LuaMod *m = modOf(L);
+              const std::string name = luaL_checkstring(L, 1);
+              if (name.empty() || name.size() > 100 || name.find("..") != std::string::npos || name[0] == '/' || name[0] == '.')
+                  return luaL_error(L, "bad module name '%s'", name.c_str());
+              for (char c : name)
+                  if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == '.' || c == '/'))
+                      return luaL_error(L, "bad module name '%s'", name.c_str());
+
+              lua_getfield(L, LUA_REGISTRYINDEX, "luahost.loaded");
+              if (!lua_istable(L, -1)) {
+                  lua_pop(L, 1);
+                  lua_newtable(L);
+                  lua_pushvalue(L, -1);
+                  lua_setfield(L, LUA_REGISTRYINDEX, "luahost.loaded");
+              }
+              lua_getfield(L, -1, name.c_str());
+              if (!lua_isnil(L, -1))
+                  return 1;
+              lua_pop(L, 1);
+
+              std::string rel = name;
+              std::replace(rel.begin(), rel.end(), '.', '/');
+              const fs::path file = m->dir / (rel + ".lua");
+              if (luaL_loadfilex(L, file.string().c_str(), "t") != LUA_OK)
+                  return lua_error(L);
+              lua_call(L, 0, 1);
+              if (lua_isnil(L, -1)) {
+                  lua_pop(L, 1);
+                  lua_pushboolean(L, 1);
+              }
+              lua_pushvalue(L, -1);
+              lua_setfield(L, -3, name.c_str());
+              return 1;
+          }
+
+          void setFn(lua_State *L, const char *name, lua_CFunction fn) {
+              lua_pushcfunction(L, fn);
+              lua_setfield(L, -2, name);
+          }
+
+          void openLibs(lua_State *L) {
+              static const luaL_Reg libs[] = {{"_G", luaopen_base},
+                                              {LUA_TABLIBNAME, luaopen_table},
+                                              {LUA_STRLIBNAME, luaopen_string},
+                                              {LUA_MATHLIBNAME, luaopen_math},
+                                              {LUA_UTF8LIBNAME, luaopen_utf8},
+                                              {LUA_COLIBNAME, luaopen_coroutine},
+                                              {LUA_OSLIBNAME, luaopen_os},
+                                              {nullptr, nullptr}};
+              for (const luaL_Reg *l = libs; l->func; ++l) {
+                  luaL_requiref(L, l->name, l->func, 1);
+                  lua_pop(L, 1);
+              }
+          }
+
+          // Removes everything that could touch files, run programs or load bytecode.
+          void sandbox(lua_State *L) {
+              static const char *removed[] = {"dofile", "loadfile", "load", "loadstring"};
+              for (const char *name : removed) {
+                  lua_pushnil(L);
+                  lua_setglobal(L, name);
+              }
+              static const char *keepOs[] = {"time", "clock", "date", "difftime"};
+              lua_getglobal(L, "os");
+              lua_newtable(L);
+              for (const char *name : keepOs) {
+                  lua_getfield(L, -2, name);
+                  lua_setfield(L, -2, name);
+              }
+              lua_setglobal(L, "os");
+              lua_pop(L, 1);
+          }
+
+          void installApi(lua_State *L, LuaMod &m) {
+              lua_newtable(L);
+              setFn(L, "info", l_logInfo);
+              setFn(L, "warn", l_logWarn);
+              setFn(L, "error", l_logError);
+              lua_setglobal(L, "log");
+              lua_pushcfunction(L, l_logInfo);
+              lua_setglobal(L, "print");
+
+              lua_pushcfunction(L, l_on);
+              lua_setglobal(L, "on");
+
+              lua_newtable(L);
+              setFn(L, "register", l_menuRegister);
+              lua_setglobal(L, "menu");
+
+              lua_newtable(L);
+              setFn(L, "get", l_storageGet);
+              setFn(L, "set", l_storageSet);
+              lua_setglobal(L, "storage");
+
+              lua_newtable(L);
+              setFn(L, "after", l_timerAfter);
+              setFn(L, "every", l_timerEvery);
+              setFn(L, "cancel", l_timerCancel);
+              lua_setglobal(L, "timer");
+
+              lua_newtable(L);
+              setFn(L, "ms", l_timeMs);
+              lua_setglobal(L, "time");
+
+              lua_newtable(L);
+              lua_pushstring(L, m.id.c_str());
+              lua_setfield(L, -2, "id");
+              lua_pushstring(L, m.name.c_str());
+              lua_setfield(L, -2, "name");
+              lua_pushstring(L, m.version.c_str());
+              lua_setfield(L, -2, "version");
+              lua_pushstring(L, m.author.c_str());
+              lua_setfield(L, -2, "author");
+              lua_pushstring(L, m.description.c_str());
+              lua_setfield(L, -2, "description");
+              lua_pushstring(L, m.dir.string().c_str());
+              lua_setfield(L, -2, "dir");
+              lua_pushboolean(L, 1);
+              lua_setfield(L, -2, "enabled");
+              lua_setglobal(L, "mod");
+
+              lua_newtable(L);
+              lua_pushinteger(L, 1);
+              lua_setfield(L, -2, "api");
+              lua_pushstring(L, "0.1.0");
+              lua_setfield(L, -2, "version");
+              lua_setglobal(L, "host");
+
+              lua_newtable(L);
+              lua_setglobal(L, "settings");
+
+              if (!m.singleFile) {
+                  lua_pushcfunction(L, l_require);
+                  lua_setglobal(L, "require");
+              }
+          }
+
+          // ---------------------------------------------------------------- menu thunks
+
+          void toggleThunk(std::string_view moduleId, bool enabled) { LuaHost::instance().handleToggle(moduleId, enabled); }
+
+          void configThunk(std::string_view moduleId, std::string_view key, std::string_view value) {
+              LuaHost::instance().handleConfigChanged(moduleId, key, value);
+          }
+
+          // Attach the change callback only if this SDK's builder accepts one with this shape.
+          template <class B> bool attachConfigCallback(B &builder) {
+              if constexpr (requires { builder.onConfigChanged(&configThunk); }) {
+                  builder.onConfigChanged(&configThunk);
+                  return true;
+              } else {
+                  return false;
+              }
+          }
+
+          } // namespace
+
+          // ------------------------------------------------------------------ LuaHost
+
+          LuaHost &LuaHost::instance() {
+              static LuaHost *host = new LuaHost(); // intentionally never destroyed
+              return *host;
+          }
+
+          LuaHost::LuaHost() {
+              for (auto &c : mHandlerCounts)
+                  c = 0;
+          }
+
+          int LuaHost::eventIndex(std::string_view name) {
+              if (name == "attack")
+                  return EvAttack;
+              if (name == "key")
+                  return EvKey;
+              if (name == "mouse")
+                  return EvMouse;
+              if (name == "touch")
+                  return EvTouch;
+              if (name == "tick")
+                  return EvTick;
+              return -1;
+          }
+
+          void LuaHost::noteHandler(const std::string &event) {
+              const int i = eventIndex(event);
+              if (i >= 0)
+                  ++mHandlerCounts[i];
+          }
+
+          bool LuaHost::guardTripped(const char *name) {
+              std::ifstream in(mDataDir / name);
+              if (!in)
+                  return false;
+              std::string content;
+              std::getline(in, content);
+              return content == kGuardTag;
+          }
+
+          void LuaHost::guardSet(const char *name) {
+              std::ofstream out(mDataDir / name, std::ios::trunc);
+              if (out)
+                  out << kGuardTag << "\n";
+          }
+
+          void LuaHost::guardClear(const char *name) {
+              std::error_code ec;
+              fs::remove(mDataDir / name, ec);
+          }
+
+          void LuaHost::log(const char *level, const std::string &modId, const std::string &message) {
+              std::lock_guard<std::mutex> lk(mLogMutex);
+              const std::string line = std::string("[") + level + "][" + modId + "] " + message;
+              if (mLogFile.is_open()) {
+                  mLogFile << line << '\n';
+                  mLogFile.flush();
+              }
+              if (mSelf) {
+                  auto &logger = mSelf->getLogger();
+                  const std::string_view lv = level;
+                  if (lv == "ERROR")
+                      logger.error("{}", line);
+                  else if (lv == "WARN")
+                      logger.warn("{}", line);
+                  else
+                      logger.info("{}", line);
+              }
+          }
+
+          void LuaHost::resolveDirs() {
+              std::string pkg;
+              {
+                  std::ifstream f("/proc/self/cmdline");
+                  std::getline(f, pkg, '\0');
+              }
+              bool pkgOk = !pkg.empty();
+              for (char c : pkg)
+                  if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_'))
+                      pkgOk = false;
+
+              std::error_code ec;
+              fs::path ext;
+              if (pkgOk) {
+                  // App media folder: visible in file managers without special permissions.
+                  ext = fs::path("/storage/emulated/0/Android/media") / pkg / "mod_host";
+                  fs::create_directories(ext / "mods", ec);
+                  if (ec || !fs::is_directory(ext / "mods", ec))
+                      ext.clear();
+              }
+              if (ext.empty()) {
+                  ext = mDataDir / "mod_host";
+                  fs::create_directories(ext / "mods", ec);
+              }
+              mExtDir = ext;
+              mModsDir = ext / "mods";
+              fs::create_directories(mDataDir / "lua_storage", ec);
+
+              const fs::path readme = mModsDir / "README.txt";
+              if (!fs::exists(readme, ec)) {
+                  std::ofstream out(readme, std::ios::trunc);
+                  if (out)
+                      out << "Put Lua mods in this folder.\n"
+                             "  One file:  mods/hello.lua\n"
+                             "  A folder:  mods/my_mod/main.lua  (optional mod.json next to it)\n"
+                             "Errors and messages are written to ../mod_host.log\n"
+                             "Restart the game after adding or changing a mod.\n";
+              }
+          }
+
+          void LuaHost::openLog() {
+              std::lock_guard<std::mutex> lk(mLogMutex);
+              if (mLogFile.is_open())
+                  mLogFile.close();
+              mLogFile.open(mExtDir / "mod_host.log", std::ios::trunc);
+          }
+
+          void LuaHost::loadStorage(LuaMod &m) {
+              std::ifstream in(m.storageFile);
+              if (!in)
+                  return;
+              nlohmann::json j = nlohmann::json::parse(in, nullptr, false);
+              if (j.is_object())
+                  m.storage = std::move(j);
+          }
+
+          void LuaHost::saveStorage(LuaMod &m) {
+              std::error_code ec;
+              fs::create_directories(m.storageFile.parent_path(), ec);
+              std::ofstream out(m.storageFile, std::ios::trunc);
+              if (out)
+                  out << m.storage.dump();
+          }
+
+          void LuaHost::prepareSettings(LuaMod &m) {
+              nlohmann::json &saved = m.storage["settings"];
+              if (!saved.is_object())
+                  saved = nlohmann::json::object();
+              lua_State *L = m.L;
+              lua_newtable(L);
+              for (const SettingDef &s : m.settings) {
+                  std::string v = s.defValue;
+                  if (saved.contains(s.key) && saved[s.key].is_string())
+                      v = saved[s.key].get<std::string>();
+                  m.values[s.key] = v;
+                  pushSettingValue(L, s, v);
+                  lua_setfield(L, -2, s.key.c_str());
+              }
+              lua_setglobal(L, "settings");
+          }
+
+          void LuaHost::recountHandlers() {
+              for (auto &c : mHandlerCounts)
+                  c = 0;
+              for (auto &mp : mMods)
+                  for (auto &kv : mp->handlers) {
+                      const int i = eventIndex(kv.first);
+                      if (i >= 0)
+                          mHandlerCounts[i] += static_cast<int>(kv.second.size());
+                  }
+          }
+
+          void LuaHost::loadMod(const fs::path &mainFile, const fs::path &dir, bool single, const std::string &defaultId) {
+              auto mod = std::make_unique<LuaMod>();
+              LuaMod &m = *mod;
+              m.id = sanitizeId(defaultId);
+              m.name = defaultId;
+              m.dir = dir;
+              m.mainFile = mainFile;
+              m.singleFile = single;
+              m.memLimit = static_cast<size_t>(std::max(1, mConfig.maxMemoryMb)) * 1024u * 1024u;
+              m.maxMs = std::max(5, mConfig.maxScriptMs);
+
+              if (!single) {
+                  std::ifstream in(dir / "mod.json");
+                  if (in) {
+                      nlohmann::json j = nlohmann::json::parse(in, nullptr, false);
+                      if (j.is_object()) {
+                          if (j.contains("enabled") && j["enabled"].is_boolean() && !j["enabled"].get<bool>()) {
+                              log("INFO", m.id, "skipped (disabled in mod.json)");
+                              return;
+                          }
+                          auto str = [&](const char *key, std::string &target) {
+                              if (j.contains(key) && j[key].is_string())
+                                  target = j[key].get<std::string>();
+                          };
+                          std::string idText;
+                          str("id", idText);
+                          if (!idText.empty())
+                              m.id = sanitizeId(idText);
+                          str("name", m.name);
+                          str("version", m.version);
+                          str("author", m.author);
+                          str("description", m.description);
+                      }
+                  }
+              }
+
+              for (auto &other : mMods)
+                  if (other->id == m.id) {
+                      log("WARN", m.id, "skipped: another mod already uses this id");
+                      return;
+                  }
+
+              m.storageFile = mDataDir / "lua_storage" / (m.id + ".json");
+              loadStorage(m);
+
+              m.L = lua_newstate(luaAlloc, &m);
+              if (!m.L) {
+                  log("ERROR", m.id, "could not create a Lua state");
+                  return;
+              }
+              openLibs(m.L);
+              sandbox(m.L);
+              installApi(m.L, m);
+              lua_sethook(m.L, timeHook, LUA_MASKCOUNT, 10000);
+
+              if (luaL_loadfilex(m.L, mainFile.string().c_str(), "t") != LUA_OK) {
+                  const char *msg = lua_tostring(m.L, -1);
+                  log("ERROR", m.id, std::string("could not load: ") + (msg ? msg : "?"));
+                  lua_close(m.L);
+                  return;
+              }
+
+              const int normalMs = m.maxMs;
+              m.maxMs = std::max(normalMs, 1000); // setting up may take longer than a single event
+              const bool ok = callTop(m, 0, 0);
+              m.maxMs = normalMs;
+              if (!ok) {
+                  lua_close(m.L);
+                  return;
+              }
+
+              log("INFO", m.id, "loaded " + m.name + " v" + m.version);
+              mMods.push_back(std::move(mod));
+          }
+
+          void LuaHost::scanAndLoad() {
+              const std::vector<fs::path> roots{mModsDir, mDataDir / "lua_mods"};
+              for (const fs::path &root : roots) {
+                  std::error_code ec;
+                  if (!fs::is_directory(root, ec))
+                      continue;
+                  std::vector<fs::path> entries;
+                  for (const auto &e : fs::directory_iterator(root, ec))
+                      entries.push_back(e.path());
+                  std::sort(entries.begin(), entries.end());
+                  for (const fs::path &p : entries) {
+                      const std::string name = p.filename().string();
+                      if (name.empty() || name[0] == '.')
+                          continue;
+                      if (fs::is_directory(p, ec)) {
+                          const fs::path mainFile = p / "main.lua";
+                          if (fs::exists(mainFile, ec))
+                              loadMod(mainFile, p, false, name);
+                      } else if (p.extension() == ".lua") {
+                          loadMod(p, root, true, p.stem().string());
+                      }
+                  }
+              }
+              recountHandlers();
+              log("INFO", "host", std::to_string(mMods.size()) + " Lua mod(s) loaded from " + mModsDir.string());
+          }
+
+          void LuaHost::registerMenus() {
+              bool any = false;
+              for (auto &mp : mMods)
+                  if (mp->hasMenu)
+                      any = true;
+              if (!any)
+                  return;
+              if (guardTripped("menu.pending")) {
+                  log("WARN", "host", "The menu crashed the game last time; skipping it. Delete menu.pending in the mod's data folder to retry.");
+                  return;
+              }
+              guardSet("menu.pending");
+
+              for (auto &mp : mMods) {
+                  LuaMod &m = *mp;
+                  if (!m.hasMenu)
+                      continue;
+                  m.moduleId = m.id + ".menu";
+
+                  pl::modmenu::ModuleBuilder builder(m.moduleId.c_str(), m.menuName.c_str());
+                  builder.modId(mSelf->getId());
+                  builder.description(m.menuDesc.c_str());
+                  builder.defaultEnabled(m.menuDefaultEnabled);
+                  builder.onToggle(&toggleThunk);
+                  for (const SettingDef &s : m.settings) {
+                      const std::string &value = m.values[s.key];
+                      if (s.type == "toggle") {
+                          builder.config(s.key.c_str(), s.label.c_str(), pl::modmenu::ConfigType::Toggle, value.c_str());
+                      } else {
+                          builder.config(s.key.c_str(), s.label.c_str(),
+                                         s.type == "slider" ? pl::modmenu::ConfigType::SliderInt
+                                                            : pl::modmenu::ConfigType::SliderFloat,
+                                         value.c_str(), s.minValue.c_str(), s.maxValue.c_str());
+                      }
+                  }
+                  if (!attachConfigCallback(builder))
+                      log("WARN", m.id, "this SDK has no menu change callback; menu edits will not reach the Lua mod");
+                  if (builder.registerModule())
+                      m.menuRegistered = true;
+                  else
+                      log("WARN", m.id, "could not register the in-game menu module");
+              }
+
+              guardClear("menu.pending");
+          }
+
+          LuaMod *LuaHost::findByModuleId(std::string_view moduleId) {
+              for (auto &mp : mMods)
+                  if (mp->moduleId == moduleId)
+                      return mp.get();
+              return nullptr;
+          }
+
+          void LuaHost::handleToggle(std::string_view moduleId, bool enabled) {
+              std::lock_guard<std::recursive_mutex> lk(mMutex);
+              LuaMod *m = findByModuleId(moduleId);
+              if (!m || m->failed || !m->L)
+                  return;
+              m->moduleEnabled = enabled;
+              lua_State *L = m->L;
+              lua_getglobal(L, "mod");
+              if (lua_istable(L, -1)) {
+                  lua_pushboolean(L, enabled ? 1 : 0);
+                  lua_setfield(L, -2, "enabled");
+              }
+              lua_pop(L, 1);
+              if (m->onToggleRef != LUA_NOREF) {
+                  lua_rawgeti(L, LUA_REGISTRYINDEX, m->onToggleRef);
+                  lua_pushboolean(L, enabled ? 1 : 0);
+                  callTop(*m, 1, 0);
+              }
+          }
+
+          void LuaHost::handleConfigChanged(std::string_view moduleId, std::string_view key, std::string_view value) {
+              std::lock_guard<std::recursive_mutex> lk(mMutex);
+              LuaMod *m = findByModuleId(moduleId);
+              if (!m || m->failed || !m->L)
+                  return;
+              const std::string k(key);
+              auto it = std::find_if(m->settings.begin(), m->settings.end(), [&](const SettingDef &s) { return s.key == k; });
+              if (it == m->settings.end())
+                  return;
+
+              m->values[k] = std::string(value);
+              nlohmann::json &saved = m->storage["settings"];
+              if (!saved.is_object())
+                  saved = nlohmann::json::object();
+              saved[k] = std::string(value);
+              saveStorage(*m);
+
+              lua_State *L = m->L;
+              lua_getglobal(L, "settings");
+              if (lua_istable(L, -1)) {
+                  pushSettingValue(L, *it, m->values[k]);
+                  lua_setfield(L, -2, k.c_str());
+              }
+              lua_pop(L, 1);
+
+              if (m->onChangeRef != LUA_NOREF) {
+                  lua_rawgeti(L, LUA_REGISTRYINDEX, m->onChangeRef);
+                  lua_pushstring(L, k.c_str());
+                  pushSettingValue(L, *it, m->values[k]);
+                  callTop(*m, 2, 0);
+              }
+          }
+
+          bool LuaHost::dispatch(const char *event, const std::function<int(lua_State *)> &pushArgs) {
+              std::lock_guard<std::recursive_mutex> lk(mMutex);
+              if (!mRunning.load())
+                  return false;
+              bool consumed = false;
+              for (auto &mp : mMods) {
+                  LuaMod &m = *mp;
+                  if (m.failed || !m.moduleEnabled || !m.L)
+                      continue;
+                  auto it = m.handlers.find(event);
+                  if (it == m.handlers.end())
+                      continue;
+                  const std::vector<int> refs = it->second;
+                  for (int ref : refs) {
+                      lua_State *L = m.L;
+                      lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+                      const int n = pushArgs ? pushArgs(L) : 0;
+                      if (callTop(m, n, 1)) {
+                          if (lua_toboolean(L, -1))
+                              consumed = true;
+                          lua_pop(L, 1);
+                      }
+                      if (m.failed)
+                          break;
+                  }
+              }
+              return consumed;
+          }
+
+          bool LuaHost::onKey(int keyCode, bool down, unsigned int unicodeChar) {
+              if (!mRunning.load() || mHandlerCounts[EvKey].load() == 0)
+                  return false;
+              return dispatch("key", [&](lua_State *L) {
+                  lua_pushinteger(L, keyCode);
+                  lua_pushboolean(L, down ? 1 : 0);
+                  lua_pushinteger(L, static_cast<lua_Integer>(unicodeChar));
+                  return 3;
+              });
+          }
+
+          bool LuaHost::onTouch(int action, int pointerId, float x, float y) {
+              if (!mRunning.load() || mHandlerCounts[EvTouch].load() == 0)
+                  return false;
+              return dispatch("touch", [&](lua_State *L) {
+                  lua_pushinteger(L, action);
+                  lua_pushinteger(L, pointerId);
+                  lua_pushnumber(L, x);
+                  lua_pushnumber(L, y);
+                  return 4;
+              });
+          }
+
+          bool LuaHost::onMouse(int button, bool down) {
+              if (!mRunning.load() || mHandlerCounts[EvMouse].load() == 0)
+                  return false;
+              return dispatch("mouse", [&](lua_State *L) {
+                  lua_pushinteger(L, button);
+                  lua_pushboolean(L, down ? 1 : 0);
+                  return 2;
+              });
+          }
+
+          void LuaHost::onAttack() {
+              if (!mRunning.load() || mHandlerCounts[EvAttack].load() == 0)
+                  return;
+              dispatch("attack", [&](lua_State *L) {
+                  lua_createtable(L, 0, 1);
+                  lua_pushinteger(L, static_cast<lua_Integer>(nowMs()));
+                  lua_setfield(L, -2, "time_ms");
+                  return 1;
+              });
+          }
+
+          void LuaHost::runTimers(int64_t now) {
+              for (auto &mp : mMods) {
+                  LuaMod &m = *mp;
+                  if (m.failed || !m.moduleEnabled || m.timers.empty() || !m.L)
+                      continue;
+                  std::vector<int> due;
+                  for (const TimerEntry &t : m.timers)
+                      if (t.nextMs <= now)
+                          due.push_back(t.id);
+                  for (int id : due) {
+                      auto it = std::find_if(m.timers.begin(), m.timers.end(), [&](const TimerEntry &t) { return t.id == id; });
+                      if (it == m.timers.end())
+                          continue; // cancelled by an earlier callback
+                      const int ref = it->ref;
+                      const bool repeat = it->repeat;
+                      if (repeat)
+                          it->nextMs = now + it->intervalMs;
+                      else
+                          m.timers.erase(it);
+                      lua_rawgeti(m.L, LUA_REGISTRYINDEX, ref);
+                      callTop(m, 0, 0);
+                      if (!repeat)
+                          luaL_unref(m.L, LUA_REGISTRYINDEX, ref);
+                      if (m.failed)
+                          break;
+                  }
+              }
+          }
+
+          void LuaHost::threadMain() {
+              int64_t lastTick = nowMs();
+              while (mRunning.load()) {
+                  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                  const int64_t now = nowMs();
+                  {
+                      std::lock_guard<std::recursive_mutex> lk(mMutex);
+                      if (!mRunning.load())
+                          break;
+                      runTimers(now);
+                  }
+                  if (mConfig.tickEvent && now - lastTick >= 50 && mHandlerCounts[EvTick].load() > 0) {
+                      const int64_t dt = now - lastTick;
+                      lastTick = now;
+                      dispatch("tick", [&](lua_State *L) {
+                          lua_pushinteger(L, static_cast<lua_Integer>(dt));
+                          return 1;
+                      });
+                  } else if (now - lastTick >= 50) {
+                      lastTick = now;
+                  }
+              }
+          }
+
+          void LuaHost::start(ll::mod::NativeMod &self, const ModConfig &config) {
+              std::lock_guard<std::recursive_mutex> lk(mMutex);
+              if (mRunning.load())
+                  return;
+              mSelf = &self;
+              mConfig = config;
+              mDataDir = self.getDataDir();
+              resolveDirs();
+              openLog();
+              log("INFO", "host", "Mod Host starting. Lua mods folder: " + mModsDir.string());
+
+              mRunning = true;
+              scanAndLoad();
+              if (mConfig.menuEnabled)
+                  registerMenus();
+              mThread = std::thread([this] { threadMain(); });
+          }
+
+          void LuaHost::stop() {
+              const bool wasRunning = mRunning.exchange(false);
+              if (mThread.joinable())
+                  mThread.join();
+              if (!wasRunning)
+                  return;
+
+              std::lock_guard<std::recursive_mutex> lk(mMutex);
+              for (auto &mp : mMods) {
+                  if (mp->menuRegistered)
+                      pl::modmenu::unregisterModule(mp->moduleId.c_str());
+                  saveStorage(*mp);
+                  if (mp->L) {
+                      lua_close(mp->L);
+                      mp->L = nullptr;
+                  }
+              }
+              mMods.clear();
+              for (auto &c : mHandlerCounts)
+                  c = 0;
+              log("INFO", "host", "Mod Host stopped");
+              std::lock_guard<std::mutex> logLock(mLogMutex);
+              if (mLogFile.is_open())
+                  mLogFile.close();
+          }
+
+          } // namespace luahost
+          SRCEOF
+          cat > src/mod/MyMod.h <<'SRCEOF'
+          #pragma once
+
+          #include <cstdint>
+          #include <optional>
+
+          #include "mod/Config.h"
+
+          #include <pl/Mod.hpp>
+          #include <pl/memory/Hook.hpp>
+
+          namespace luahost {
+
+          class LuaHostMod {
+            public:
+              static LuaHostMod &instance();
+
+              LuaHostMod();
+
+              [[nodiscard]] ll::mod::NativeMod &getSelf() const { return mSelf; }
+
+              bool load();
+              bool enable();
+              bool disable();
+              bool unload();
+
+            private:
+              uintptr_t resolveAttackTarget();
+              void startJava();
+              void installInput()
+              void installInput();
+              void installAttackHook();
+
+              pl::memory::HookHandle mAttackHook;
+              ll::mod::NativeMod &mSelf;
+              ModConfig mConfig;
+              std::optional<pl::config::ConfigFile<ModConfig>> mConfigFile;
+          };
+
+          } // namespace luahost
+          SRCEOF
+          cat > src/mod/MyMod.cpp <<'SRCEOF'
+          #include "mod/MyMod.h"
+
+          #include <atomic>
+          #include <cstdlib>
+          #include <filesystem>
+          #include <string>
+          #include <string_view>
+
+          #include <link.h>
+
+          #include <pl/Mod.hpp>
+          #include <pl/memory/Signature.hpp>
+
+          #if defined(__has_include)
+          #if __has_include(<pl/Input.hpp>)
+          #include <pl/Input.hpp>
+          #define LUAHOST_HAS_INPUT 1
+          #endif
+          #endif
+          #ifndef LUAHOST_HAS_INPUT
+          #define LUAHOST_HAS_INPUT 0
+          #endif
+
+          #include "mod/JavaBridge.h"
+          #include "mod/LuaHost.h"
+
+          // Generated by the build: the compiled Java bridge (org.modhost.*) as a C array.
+          #include "mod/BridgeDex.inc"
+
+          namespace luahost {
+
+          namespace {
+
+          // Minecraft Bedrock 1.26.62.1 (libminecraftpe.so, arm64): the shared function the
+          // GameMode attack path goes through. Offsets are version specific, so the first two
+          // instructions are checked before hooking. Only used when "attackEvent" is on.
+          constexpr uintptr_t kRvaAttackSender = 0x1009d290;
+          constexpr uint32_t kExpectWord0 = 0xd10743ff; // sub sp, sp, #464
+          constexpr uint32_t kExpectWord1 = 0xa9187bfd; // stp x29, x30, [sp, #384]
+
+          // Pass-through detour using 8 integer registers so it stays safe even if the
+          // real function takes fewer arguments.
+          using U = uint64_t;
+          using Fn8 = U (*)(U, U, U, U, U, U, U, U);
+          Fn8 gOriginal = nullptr;
+          std::atomic<int> gFirstCalls{0};
+
+          U attackDetour(U a0, U a1, U a2, U a3, U a4, U a5, U a6, U a7) {
+              LuaHost &host = LuaHost::instance();
+              const bool first = gFirstCalls.fetch_add(1) < 3;
+              if (first)
+                  host.guardSet("attack_hook.pending");
+              // a2 is 1 on the attack path (assumption from the game's code layout).
+              if ((a2 & 1U) != 0) {
+                  host.onAttack();
+                  JavaBridge::instance().onAttack();
+              }
+              const U result = gOriginal(a0, a1, a2, a3, a4, a5, a6, a7);
+              if (first)
+                  host.guardClear("attack_hook.pending");
+              return result;
+          }
+
+          uintptr_t moduleBase(const char *name) {
+              struct Ctx {
+                  const char *name;
+                  uintptr_t base;
+              } ctx{name, 0};
+              dl_iterate_phdr(
+                  [](dl_phdr_info *info, size_t, void *data) -> int {
+                      auto *c = static_cast<Ctx *>(data);
+                      if (info->dlpi_name && std::string_view(info->dlpi_name).find(c->name) != std::string_view::npos) {
+                          c->base = info->dlpi_addr;
+                          return 1;
+                      }
+                      return 0;
+                  },
+                  &ctx);
+              return ctx.base;
+          }
+
+          } // namespace
+
+          LuaHostMod &LuaHostMod::instance() {
+              static LuaHostMod instance;
+              return instance;
+          }
+
+          LuaHostMod::LuaHostMod() : mSelf(*ll::mod::NativeMod::current()) {}
+
+          bool LuaHostMod::load() {
+              auto &self = getSelf();
+              self.getLogger().debug("Loading...");
+
+              std::error_code ec;
+              std::filesystem::create_directories(self.getDataDir(), ec);
+              if (ec) {
+                  self.getLogger().error("Failed to create data directory {}: {}", self.getDataDir().string(),
+                                         ec.message());
+                  return false;
+              }
+
+              std::filesystem::create_directories(self.getConfigDir(), ec);
+              if (ec) {
+                  self.getLogger().error("Failed to create config directory {}: {}",
+                                         self.getConfigDir().string(), ec.message());
+                  return false;
+              }
+
+              mConfigFile.emplace();
+              if (!mConfigFile->load()) {
+                  self.getLogger().warn("Failed to load typed config");
+                  return false;
+              }
+              mConfig = mConfigFile->value();
+
+              self.getLogger().info("Loaded {} from {}", self.getName(), self.getModDir().string());
+              return true;
+          }
+
+          void LuaHostMod::installInput() {
+          #if LUAHOST_HAS_INPUT
+              // The SDK has no unregister call, so register once per process.
+              static std::atomic<bool> installed{false};
+              if (installed.exchange(true))
+                  return;
+              pl::input::registerKeyCallback([](const pl::input::KeyEvent &e) -> bool {
+                  const bool lua = LuaHost::instance().onKey(e.keyCode, e.isKeyDown, e.unicodeChar);
+                  const bool java = JavaBridge::instance().onKey(e.keyCode, e.isKeyDown, e.unicodeChar);
+                  return lua || java;
+              });
+              pl::input::registerTouchCallback([](const pl::input::TouchEvent &e) -> bool {
+                  const bool lua = LuaHost::instance().onTouch(e.action, e.pointerId, e.x, e.y);
+                  const bool java = JavaBridge::instance().onTouch(e.action, e.pointerId, e.x, e.y);
+                  return lua || java;
+              });
+              pl::input::registerMouseCallback([](const pl::input::MouseEvent &e) -> bool {
+                  const bool lua = LuaHost::instance().onMouse(e.button, e.isDown);
+                  const bool java = JavaBridge::instance().onMouse(e.button, e.isDown);
+                  return lua || java;
+              });
+          #else
+              getSelf().getLogger().warn("This SDK has no Input API; Lua key, touch and mouse events are unavailable.");
+          #endif
+          }
+
+          uintptr_t LuaHostMod::resolveAttackTarget() {
+              auto &log = getSelf().getLogger();
+              const uintptr_t base = moduleBase("libminecraftpe.so");
+              if (base == 0) {
+                  log.warn("Could not find libminecraftpe.so base address");
+                  return 0;
+              }
+              uintptr_t rva = kRvaAttackSender;
+              if (!mConfig.attackRva.empty())
+                  rva = static_cast<uintptr_t>(std::strtoull(mConfig.attackRva.c_str(), nullptr, 16));
+              return base + rva;
+          }
+
+          void LuaHostMod::installAttackHook() {
+              auto &self = getSelf();
+              LuaHost &host = LuaHost::instance();
+              if (host.guardTripped("attack_hook.pending")) {
+                  self.getLogger().warn("The attack hook crashed the game last time; skipping it. Delete attack_hook.pending in the data folder to retry.");
+                  return;
+              }
+              const uintptr_t target = resolveAttackTarget();
+              if (target == 0)
+                  return;
+              if (mConfig.attackRva.empty()) {
+                  const auto *w = reinterpret_cast<const uint32_t *>(target);
+                  if (w[0] != kExpectWord0 || w[1] != kExpectWord1) {
+                      self.getLogger().warn("Bytes at the attack target do not match 1.26.62.1; attack event skipped to avoid a crash.");
+                      return;
+                  }
+              }
+              mAttackHook = pl::memory::HookHandle(reinterpret_cast<void *>(target),
+                                                   reinterpret_cast<void *>(&attackDetour),
+                                                   reinterpret_cast<void **>(&gOriginal),
+                                                   pl::memory::HookPriority::Normal);
+              if (mAttackHook.installed())
+                  self.getLogger().info("Attack hook installed at 0x{:x}", target);
+              else
+                  self.getLogger().error("Failed to install attack hook");
+          }
+
+          void LuaHostMod::startJava() {
+              auto &self = getSelf();
+              LuaHost &host = LuaHost::instance();
+              if (host.guardTripped("java_start.pending")) {
+                  host.log("WARN", "java", "Starting Java mods crashed the game last time; skipping them. Delete java_start.pending in the mod's data folder to retry.");
+                  return;
+              }
+              std::error_code ec;
+              const std::filesystem::path modsDir = host.extDir() / "java_mods";
+              std::filesystem::create_directories(modsDir, ec);
+
+              host.guardSet("java_start.pending");
+              JavaBridge::instance().start(
+                  self, mConfig, modsDir, host.dataDir() / "java_data", host.dataDir() / "java_cache",
+                  [](JNIEnv *e) { return JavaBridge::createInMemoryDexLoader(e, kBridgeDex, kBridgeDexSize); });
+              host.guardClear("java_start.pending");
+          }
+
+          bool LuaHostMod::enable() {
+              auto &self = getSelf();
+              self.getLogger().debug("Enabling...");
+              if (!mConfig.enabled) {
+                  self.getLogger().info("Disabled by config");
+                  return true;
+              }
+
+              LuaHost::instance().start(self, mConfig);
+              if (mConfig.javaMods)
+                  startJava();
+              installInput();
+              if (mConfig.attackEvent)
+                  installAttackHook();
+              return true;
+          }
+
+          bool LuaHostMod::disable() {
+              getSelf().getLogger().debug("Disabling...");
+              mAttackHook.reset();
+              JavaBridge::instance().stop();
+              LuaHost::instance().stop();
+              return true;
+          }
+
+          bool LuaHostMod::unload() {
+              getSelf().getLogger().debug("Unloading...");
+              mConfigFile.reset();
+              return true;
+          }
+
+          } // namespace luahost
+          SRCEOF
+          cat > src/mod/BridgeDex.inc <<'SRCEOF'
+          // Placeholder. The build replaces this file with the compiled Java bridge.
+          static const unsigned char kBridgeDex[] = {0};
+          static const unsigned int kBridgeDexSize = 0;
+          SRCEOF
+          cat > java/src/org/modhost/JavaHost.java <<'SRCEOF'
+          package org.modhost;
+
+          import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.FileOutputStream;
+          import java.io.IOException;
+          import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.io.PrintWriter;
+          import java.io.StringWriter;
+          import java.lang.reflect.Constructor;
+          import java.net.URL;
+          import java.net.URLClassLoader;
+          import java.util.ArrayList;
+          import java.util.Arrays;
+          import java.util.HashMap;
+          import java.util.List;
+          import java.util.Map;
+          import java.util.Properties;
+          import java.util.concurrent.CopyOnWriteArrayList;
+          import java.util.concurrent.ScheduledExecutorService;
+          import java.util.concurrent.ScheduledFuture;
+          import java.util.concurrent.ScheduledThreadPoolExecutor;
+          import java.util.concurrent.TimeUnit;
+          import java.util.jar.JarFile;
+
+          /**
+           * Loads Java mods from jar files and delivers events to them. The native side calls the
+           * public static methods; mods only ever see {@link ModContext}.
+           */
+          public final class JavaHost {
+              public static final int API_VERSION = 1;
+              static final String DESCRIPTOR = "modhost-mod.properties";
+              private static final int MAX_ERRORS = 5;
+              private static final int MAX_TIMERS = 200;
+              private static final int MAX_SETTINGS = 64;
+
+              private static final Object LOCK = new Object();
+              private static final List<LoadedMod> MODS = new ArrayList<>();
+              private static volatile boolean running;
+              private static NativeApi nativeApi;
+              private static ScheduledThreadPoolExecutor scheduler;
+              private static long lastTickNanos;
+              private static boolean tickEnabled;
+
+              private JavaHost() {}
+
+              public static void setNativeApi(NativeApi api) {
+                  nativeApi = api;
+              }
+
+              // ------------------------------------------------------------ lifecycle
+
+              public static void start(String modsDir, String dataDir, String cacheDir, boolean tick) {
+                  synchronized (LOCK) {
+                      if (running) {
+                          return;
+                      }
+                      running = true;
+                      tickEnabled = tick;
+                      File mods = new File(modsDir);
+                      File data = new File(dataDir);
+                      File cache = new File(cacheDir);
+                      mods.mkdirs();
+                      data.mkdirs();
+                      cache.mkdirs();
+                      logLine("INFO", "java", "Java host starting. Mods folder: " + mods);
+
+                      scheduler = new ScheduledThreadPoolExecutor(1, r -> {
+                          Thread t = new Thread(r, "modhost-timer");
+                          t.setDaemon(true);
+                          return t;
+                      });
+                      scheduler.setRemoveOnCancelPolicy(true);
+
+                      File[] jars = mods.listFiles((dir, name) -> name.toLowerCase.endsWith(".jar"));
+                      if (jars != null) {
+                          Arrays.sort(jars);
+                          for (File jar : jars) {
+                              loadJar(jar, data, cache);
+                          }
+                      }
+                      logLine("INFO", "java", MODS.size() + " Java mod(s) loaded");
+
+                      lastTickNanos = System.nanoTime();
+                      scheduler.scheduleWithFixedDelay(JavaHost::tick, 50, 50, TimeUnit.MILLISECONDS);
+                  }
+              }
+
+              public static void stop() {
+                  ScheduledThreadPoolExecutor toStop;
+                  synchronized (LOCK) {
+                      if (!running) {
+                          return;
+                      }
+                      running = false;
+                      for (LoadedMod m : MODS) {
+                          m.shutdown();
+                      }
+                      MODS.clear();
+                      toStop = scheduler;
+                      scheduler = null;
+                      logLine("INFO", "java", "Java host stopped");
+                  }
+                  if (toStop != null) {
+                      toStop.shutdownNow();
+                  }
+              }
+
+              // ------------------------------------------------------------ events from native
+
+              public static boolean onKey(int keyCode, boolean down, int unicodeChar) {
+                  if (!running) {
+                      return false;
+                  }
+                  boolean consumed = false;
+                  synchronized (LOCK) {
+                      for (LoadedMod m : MODS) {
+                          if (!m.usable()) {
+                              continue;
+                          }
+                          for (ModContext.KeyHandler h : m.keyHandlers) {
+                              try {
+                                  if (h.onKey(keyCode, down, unicodeChar)) {
+                                      consumed = true;
+                                  }
+                              } catch (Throwable t) {
+                                  m.fail("key handler", t);
+                              }
+                          }
+                      }
+                  }
+                  return consumed;
+              }
+
+              public static boolean onTouch(int action, int pointerId, float x, float y) {
+                  if (!running) {
+                      return false;
+                  }
+                  boolean consumed = false;
+                  synchronized (LOCK) {
+                      for (LoadedMod m : MODS) {
+                          if (!m.usable()) {
+                              continue;
+                          }
+                          for (ModContext.TouchHandler h : m.touchHandlers) {
+                              try {
+                                  if (h.onTouch(action, pointerId, x, y)) {
+                                      consumed = true;
+                                  }
+                              } catch (Throwable t) {
+                                  m.fail("touch handler", t);
+                              }
+                          }
+                      }
+                  }
+                  return consumed;
+              }
+
+              public static boolean onMouse(int button, boolean down) {
+                  if (!running) {
+                      return false;
+                  }
+                  boolean consumed = false;
+                  synchronized (LOCK) {
+                      for (LoadedMod m : MODS) {
+                          if (!m.usable()) {
+                              continue;
+                          }
+                          for (ModContext.MouseHandler h : m.mouseHandlers) {
+                              try {
+                                  if (h.onMouse(button, down)) {
+                                      consumed = true;
+                                  }
+                              } catch (Throwable t) {
+                                  m.fail("mouse handler", t);
+                              }
+                          }
+                      }
+                  }
+                  return consumed;
+              }
+
+              public static void onAttack() {
+                  if (!running) {
+                      return;
+                  }
+                  long now = System.currentTimeMillis();
+                  synchronized (LOCK) {
+                      for (LoadedMod m : MODS) {
+                          if (!m.usable()) {
+                              continue;
+                          }
+                          for (ModContext.AttackHandler h : m.attackHandlers) {
+                              try {
+                                  h.onAttack(now);
+                              } catch (Throwable t) {
+                                  m.fail("attack handler", t);
+                              }
+                          }
+                      }
+                  }
+              }
+
+              public static void onToggle(String moduleId, boolean enabled) {
+                  synchronized (LOCK) {
+                      LoadedMod m = byModuleId(moduleId);
+                      if (m == null || m.failed) {
+                          return;
+                      }
+                      m.enabled = enabled;
+                      Menu.ToggleListener l = m.menu == null ? null : m.menu.toggleListener();
+                      if (l != null) {
+                          try {
+                              l.onToggle(enabled);
+                          } catch (Throwable t) {
+                              m.fail("toggle listener", t);
+                          }
+                      }
+                  }
+              }
+
+              public static void onConfigChanged(String moduleId, String key, String value) {
+                  synchronized (LOCK) {
+                      LoadedMod m = byModuleId(moduleId);
+                      if (m == null || m.failed || !m.values.containsKey(key)) {
+                          return;
+                      }
+                      m.values.put(key, value);
+                      m.store.setProperty("setting." + key, value);
+                      m.saveStore();
+                      Menu.ChangeListener l = m.menu == null ? null : m.menu.changeListener();
+                      if (l != null) {
+                          try {
+                              l.onChange(key, m.typedValue(key));
+                          } catch (Throwable t) {
+                              m.fail("change listener", t);
+                          }
+                      }
+                  }
+              }
+
+              // ------------------------------------------------------------ internals
+
+              private static LoadedMod byModuleId(String moduleId) {
+                  for (LoadedMod m : MODS) {
+                      if (moduleId != null && moduleId.equals(m.moduleId)) {
+                          return m;
+                      }
+                  }
+                  return null;
+              }
+
+              private static void tick() {
+                  long now = System.nanoTime();
+                  long dtMs = (now - lastTickNanos) / 1_000_000L;
+                  lastTickNanos = now;
+                  if (!running || !tickEnabled) {
+                      return;
+                  }
+                  synchronized (LOCK) {
+                      for (LoadedMod m : MODS) {
+                          if (!m.usable()) {
+                              continue;
+                          }
+                          for (ModContext.TickHandler h : m.tickHandlers) {
+                              try {
+                                  h.onTick(dtMs);
+                              } catch (Throwable t) {
+                                  m.fail("tick handler", t);
+                              }
+                          }
+                      }
+                  }
+              }
+
+              static void logLine(String level, String modId, String message) {
+                  NativeApi api = nativeApi;
+                  if (api != null) {
+                      try {
+                          api.log(level, modId, message);
+                          return;
+                      } catch (Throwable ignored) {
+                          // fall through to stdout
+                      }
+                  }
+                  System.out.println("[" + level + "][" + modId + "] " + message);
+              }
+
+              private static boolean isAndroid() {
+                  try {
+                      Class.forName("dalvik.system.DexClassLoader");
+                      return true;
+                  } catch (ClassNotFoundException e) {
+                      return false;
+                  }
+              }
+
+              private static ClassLoader newClassLoader(File jar, File cacheDir) throws Exception {
+                  ClassLoader parent = JavaHost.class.getClassLoader();
+                  if (!isAndroid()) {
+                      return new URLClassLoader(new URL[] {jar.toURI().toURL()}, parent);
+                  }
+                  // Newer Android versions refuse dex files that are writable, so load a read-only copy.
+                  File copy = new File(cacheDir, jar.getName() + "-" + jar.length() + "-" + jar.lastModified() + ".jar");
+                  if (!copy.exists()) {
+                      try (InputStream in = new FileInputStream(jar); OutputStream out = new FileOutputStream(copy)) {
+                          byte[] buf = new byte[16384];
+                          int n;
+                          while ((n = in.read(buf)) > 0) {
+                              out.write(buf, 0, n);
+                          }
+                      }
+                      copy.setReadOnly();
+                  }
+                  Class<?> dcl = Class.forName("dalvik.system.DexClassLoader");
+                  Constructor<?> ctor = dcl.getConstructor(String.class, String.class, String.class, ClassLoader.class);
+                  return (ClassLoader) ctor.newInstance(copy.getAbsolutePath(), cacheDir.getAbsolutePath(), null, parent);
+              }
+
+              private static void loadJar(File jar, File dataRoot, File cacheDir) {
+                  String jarName = jar.getName();
+                  try {
+                      Properties props = new Properties();
+                      boolean hasDex;
+                      try (JarFile jf = new JarFile(jar)) {
+                          java.util.zip.ZipEntry desc = jf.getEntry(DESCRIPTOR);
+                          if (desc == null) {
+                              logLine("ERROR", jarName, "skipped: no " + DESCRIPTOR + " inside the jar");
+                              return;
+                          }
+                          try (InputStream in = jf.getInputStream(desc)) {
+                              props.load(in);
+                          }
+                          hasDex = jf.getEntry("classes.dex") != null;
+                      }
+                      String mainClass = props.getProperty("main", "").trim();
+                      if (mainClass.isEmpty()) {
+                          logLine("ERROR", jarName, "skipped: " + DESCRIPTOR + " has no 'main' class");
+                          return;
+                      }
+                      if (isAndroid() && !hasDex) {
+                          logLine("ERROR", jarName,
+                                  "skipped: the jar has no classes.dex. Run d8 on it first (see docs/JAVA_MODS.md)");
+                          return;
+                      }
+                      String stem = jarName.substring(0, jarName.length() - 4);
+                      String id = sanitizeId(props.getProperty("id", stem));
+                      for (LoadedMod other : MODS) {
+                          if (other.id.equals(id)) {
+                              logLine("WARN", id, "skipped: another Java mod already uses this id");
+                              return;
+                          }
+                      }
+                      int api = parseIntOr(props.getProperty("api", "1"), 1);
+                      if (api > API_VERSION) {
+                          logLine("ERROR", id, "skipped: needs host API " + api + " but this host has " + API_VERSION);
+                          return;
+                      }
+
+                      ClassLoader loader = newClassLoader(jar, cacheDir);
+                      Object instance = loader.loadClass(mainClass).getDeclaredConstructor().newInstance();
+                      if (!(instance instanceof Mod)) {
+                          logLine("ERROR", id, "skipped: " + mainClass + " does not implement org.modhost.Mod");
+                          return;
+                      }
+                      File modData = new File(dataRoot, id);
+                      modData.mkdirs();
+                      LoadedMod m = new LoadedMod(id, props.getProperty("name", id), props.getProperty("version", "0.0.0"),
+                              props.getProperty("author", ""), props.getProperty("description", ""), jar.getParentFile(),
+                              modData, (Mod) instance);
+                      MODS.add(m);
+                      try {
+                          m.mod.onLoad(m);
+                          logLine("INFO", id, "loaded " + m.name + " v" + m.version);
+                      } catch (Throwable t) {
+                          m.fail("onLoad", t);
+                          m.shutdown();
+                          MODS.remove(m);
+                      }
+                  } catch (Throwable t) {
+                      logLine("ERROR", jarName, "could not load: " + describe(t));
+                  }
+              }
+
+              static String sanitizeId(String s) {
+                  StringBuilder b = new StringBuilder();
+                  for (char c : s.toCharArray()) {
+                      if (Character.isLetterOrDigit(c) && c < 128) {
+                          b.append(Character.toLowerCase(c));
+                      } else if (c == '_' || c == '-' || c == '.') {
+                          b.append(c);
+                      } else {
+                          b.append('_');
+                      }
+                  }
+                  return b.length() == 0 ? "mod" : b.toString();
+              }
+
+              static int parseIntOr(String s, int def) {
+                  try {
+                      return Integer.parseInt(s.trim());
+                  } catch (Exception e) {
+                      return def;
+                  }
+              }
+
+              static String describe(Throwable t) {
+                  StringWriter sw = new StringWriter();
+                  t.printStackTrace(new PrintWriter(sw));
+                  String[] lines = sw.toString().split("\n");
+                  StringBuilder b = new StringBuilder();
+                  for (int i = 0; i < Math.min(lines.length, 8); i++) {
+                      b.append(lines[i].trim()).append(i + 1 < Math.min(lines.length, 8) ? " | " : "");
+                  }
+                  return b.toString();
+              }
+
+              // ------------------------------------------------------------ one loaded mod
+
+              private static final class LoadedMod implements ModContext {
+                  final String id;
+                  final String name;
+                  final String version;
+                  final String author;
+                  final String description;
+                  final File dir;
+                  final File dataDir;
+                  final Mod mod;
+
+                  final List<ModContext.KeyHandler> keyHandlers = new CopyOnWriteArrayList<>();
+                  final List<ModContext.TouchHandler> touchHandlers = new CopyOnWriteArrayList<>();
+                  final List<ModContext.MouseHandler> mouseHandlers = new CopyOnWriteArrayList<>();
+                  final List<ModContext.AttackHandler> attackHandlers = new CopyOnWriteArrayList<>();
+                  final List<ModContext.TickHandler> tickHandlers = new CopyOnWriteArrayList<>();
+                  final List<ScheduledFuture<?>> timers = new CopyOnWriteArrayList<>();
+
+                  final Properties store = new Properties();
+                  final File storeFile;
+                  final Map<String, String> values = new HashMap<>();
+                  final Map<String, Setting> defs = new HashMap<>();
+                  Menu menu;
+                  String moduleId;
+                  volatile boolean enabled = true;
+                  int errors;
+                  volatile boolean failed;
+
+                  LoadedMod(String id, String name, String version, String author, String description, File dir,
+                          File dataDir, Mod mod) {
+                      this.id = id;
+                      this.name = name;
+                      this.version = version;
+                      this.author = author;
+                      this.description = description;
+                      this.dir = dir;
+                      this.dataDir = dataDir;
+                      this.mod = mod;
+                      this.storeFile = new File(dataDir, "storage.properties");
+                      if (storeFile.exists()) {
+                          try (InputStream in = new FileInputStream(storeFile)) {
+                              store.load(in);
+                          } catch (IOException ignored) {
+                              // start empty
+                          }
+                      }
+                  }
+
+                  boolean usable() {
+                      return !failed && enabled;
+                  }
+
+                  void fail(String where, Throwable t) {
+                      logLine("ERROR", id, where + " failed: " + describe(t));
+                      if (++errors >= MAX_ERRORS && !failed) {
+                          failed = true;
+                          logLine("ERROR", id, "stopped after too many errors");
+                      }
+                  }
+
+                  void shutdown() {
+                      try {
+                          mod.onUnload();
+                      } catch (Throwable t) {
+                          logLine("ERROR", id, "onUnload failed: " + describe(t));
+                      }
+                      for (ScheduledFuture<?> f : timers) {
+                          f.cancel(false);
+                      }
+                      timers.clear();
+                      NativeApi api = nativeApi;
+                      if (menu != null && api != null && moduleId != null) {
+                          try {
+                              api.unregisterMenu(moduleId);
+                          } catch (Throwable ignored) {
+                              // nothing to do
+                          }
+                      }
+                  }
+
+                  void saveStore() {
+                      try (OutputStream out = new FileOutputStream(storeFile)) {
+                          store.store(out, "Java mod storage");
+                      } catch (IOException ignored) {
+                          // keep running; the value stays in memory
+                      }
+                  }
+
+                  Object typedValue(String key) {
+                      Setting s = defs.get(key);
+                      String v = values.get(key);
+                      if (s == null || v == null) {
+                          return null;
+                      }
+                      switch (s.type) {
+                          case Setting.TOGGLE:
+                              return Boolean.valueOf("true".equals(v));
+                          case Setting.SLIDER:
+                              return Integer.valueOf((int) parseDoubleOr(v, 0));
+                          default:
+                              return Double.valueOf(parseDoubleOr(v, 0));
+                      }
+                  }
+
+                  // ---- ModContext
+
+                  @Override
+                
