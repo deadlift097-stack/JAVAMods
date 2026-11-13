@@ -1,0 +1,1159 @@
+Bytecode of the mixin handlers in BetterHitreg-1_0_8-BETA_26_3.jar
+
+== ArmorMixin.render (PoseStack, SubmitNodeCollector, int, HumanoidRenderState, float, float, CallbackInfo) -> void
+   @Inject {"method": ["submit(Lcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/SubmitNodeCollector;ILnet/minecraft/client/renderer/entity/state/HumanoidRenderState;FF)V"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: getstatic Toggle.HIDE_ARMOR:Lyou/jass/betterhitreg/settings/Toggle;
+      3: invokevirtual Toggle.toggled:()Z
+      6: ifeq -> 14
+      9: aload #7
+     11: invokevirtual CallbackInfo.cancel:()V
+     14: return
+
+== AttackMixin.attack (Player, Entity, CallbackInfo) -> void
+   @Inject {"method": ["attack"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}]}
+      0: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+      3: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+      6: ifnull -> 30
+      9: aload_1
+     10: instanceof net/minecraft/world/entity/LivingEntity
+     13: ifeq -> 30
+     16: aload_1
+     17: instanceof net/minecraft/world/entity/decoration/ArmorStand
+     20: ifne -> 30
+     23: aload_1
+     24: invokevirtual Entity.isAlive:()Z
+     27: ifne -> 31
+     30: return
+     31: aload_1
+     32: checkcast net/minecraft/world/entity/LivingEntity
+     35: putstatic Hitreg.target:Lnet/minecraft/world/entity/LivingEntity;
+     38: invokestatic System.currentTimeMillis:()J
+     41: getstatic Hitreg.lastAttack:J
+     44: lsub
+     45: lstore_3
+     46: lload_3
+     47: ldc2_w 475
+     50: lcmp
+     51: ifge -> 58
+     54: iconst_1
+     55: goto -> 59
+     58: iconst_0
+     59: istore #5
+     61: new you/jass/betterhitreg/hitreg/Hit
+     64: dup
+     65: invokespecial Hit.<init>:()V
+     68: astore #6
+     70: aload #6
+     72: getstatic Hitreg.target:Lnet/minecraft/world/entity/LivingEntity;
+     75: putfield Hit.target:Lnet/minecraft/world/entity/LivingEntity;
+     78: aload #6
+     80: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     83: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     86: ldc 0.5
+     88: invokevirtual LocalPlayer.getAttackStrengthScale:(F)F
+     91: putfield Hit.cooldown:F
+     94: aload #6
+     96: iload #5
+     98: putfield Hit.tooEarlyForDamage:Z
+    101: aload #6
+    103: aload #6
+    105: getfield Hit.cooldown:F
+    108: ldc 0.8999999761581421
+    110: fcmpg
+    111: ifgt -> 118
+    114: iconst_1
+    115: goto -> 119
+    118: iconst_0
+    119: putfield Hit.tooEarlyForSpecial:Z
+    122: aload #6
+    124: getstatic Hitreg.target:Lnet/minecraft/world/entity/LivingEntity;
+    127: getstatic Items.SHIELD:Lnet/minecraft/world/item/Item;
+    130: invokevirtual LivingEntity.isHolding:(Lnet/minecraft/world/item/Item;)Z
+    133: putfield Hit.hadShield:Z
+    136: aload #6
+    138: getstatic Hitreg.target:Lnet/minecraft/world/entity/LivingEntity;
+    141: invokevirtual LivingEntity.isBlocking:()Z
+    144: putfield Hit.wasBlocked:Z
+    147: aload #6
+    149: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    152: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    155: invokevirtual LocalPlayer.isSprinting:()Z
+    158: putfield Hit.wasSprinting:Z
+    161: aload #6
+    163: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    166: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    169: getfield LocalPlayer.fallDistance:D
+    172: dconst_0
+    173: dcmpl
+    174: ifle -> 181
+    177: iconst_1
+    178: goto -> 182
+    181: iconst_0
+    182: putfield Hit.wasFalling:Z
+    185: aload #6
+    187: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    190: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    193: invokestatic MultiVersion.isOnGround:(Lnet/minecraft/world/entity/Entity;)Z
+    196: putfield Hit.wasOnGround:Z
+    199: aload #6
+    201: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    204: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    207: invokevirtual LocalPlayer.onClimbable:()Z
+    210: putfield Hit.wasClimbing:Z
+    213: aload #6
+    215: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    218: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    221: invokevirtual LocalPlayer.isInWater:()Z
+    224: putfield Hit.wasTouchingWater:Z
+    227: aload #6
+    229: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    232: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    235: invokevirtual LocalPlayer.isPassenger:()Z
+    238: putfield Hit.wasInVehicle:Z
+    241: aload #6
+    243: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    246: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    249: getstatic MobEffects.BLINDNESS:Lnet/minecraft/core/Holder;
+    252: invokevirtual LocalPlayer.hasEffect:(Lnet/minecraft/core/Holder;)Z
+    255: putfield Hit.wasBlind:Z
+    258: aload #6
+    260: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    263: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    266: invokevirtual LocalPlayer.getMainHandItem:()Lnet/minecraft/world/item/ItemStack;
+    269: getstatic ItemTags.SWORDS:Lnet/minecraft/tags/TagKey;
+    272: invokevirtual ItemStack.is:(Lnet/minecraft/tags/TagKey;)Z
+    275: putfield Hit.wasHoldingSword:Z
+    278: aload #6
+    280: invokestatic MultiVersion.isMovingFast:()Z
+    283: putfield Hit.wasMovingFast:Z
+    286: aload #6
+    288: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    291: getfield Minecraft.options:Lnet/minecraft/client/Options;
+    294: getfield Options.keyUp:Lnet/minecraft/client/KeyMapping;
+    297: invokevirtual KeyMapping.isDown:()Z
+    300: putfield Hit.wasMovingForward:Z
+    303: aload #6
+    305: invokestatic MultiVersion.hasSharpness:()Z
+    308: putfield Hit.swordHadSharpness:Z
+    311: aload #6
+    313: getstatic Hitreg.serverSprinting:Z
+    316: putfield Hit.serverWasSprinting:Z
+    319: aload #6
+    321: getstatic Hitreg.lastTarget:I
+    324: aload_1
+    325: invokevirtual Entity.getId:()I
+    328: if_icmpeq -> 335
+    331: iconst_1
+    332: goto -> 336
+    335: iconst_0
+    336: putfield Hit.wasNewTarget:Z
+    339: aload #6
+    341: aload_1
+    342: getfield Entity.invulnerableTime:I
+    345: bipush 10
+    347: if_icmple -> 362
+    350: lload_3
+    351: ldc2_w 1000
+    354: lcmp
+    355: iflt -> 362
+    358: iconst_1
+    359: goto -> 363
+    362: iconst_0
+    363: putfield Hit.wasHitByAnother:Z
+    366: aload #6
+    368: aload_1
+    369: invokevirtual Entity.isInvisible:()Z
+    372: putfield Hit.wasInvisible:Z
+    375: aload #6
+    377: getstatic Hitreg.tick:I
+    380: getstatic Hitreg.lastBlockInteraction:I
+    383: isub
+    384: bipush 10
+    386: if_icmpgt -> 393
+    389: iconst_1
+    390: goto -> 394
+    393: iconst_0
+    394: putfield Hit.previouslyInteractedWithBlock:Z
+    397: iload #5
+    399: ifne -> 560
+    402: getstatic Hitreg.lastAttackLocation:Lnet/minecraft/world/phys/Vec3;
+    405: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    408: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    411: invokestatic MultiVersion.getBasePosition:(Lnet/minecraft/world/entity/Entity;)Lnet/minecraft/world/phys/Vec3;
+    414: invokevirtual Vec3.distanceToSqr:(Lnet/minecraft/world/phys/Vec3;)D
+    417: ldc2_w 2500.0
+    420: dcmpl
+    421: iflt -> 428
+    424: iconst_1
+    425: goto -> 429
+    428: iconst_0
+    429: putstatic Hitreg.hitWasFarFromPrevious:Z
+    432: getstatic Hitreg.fighting:Z
+    435: ifne -> 444
+    438: invokestatic System.currentTimeMillis:()J
+    441: putstatic Hitreg.fightStartedAt:J
+    444: iconst_1
+    445: putstatic Hitreg.fighting:Z
+    448: aload #6
+    450: getfield Hit.wasHitByAnother:Z
+    453: putstatic Hitreg.hitByAnother:Z
+    456: aload #6
+    458: getfield Hit.wasNewTarget:Z
+    461: putstatic Hitreg.newTarget:Z
+    464: aload #6
+    466: getfield Hit.wasBlocked:Z
+    469: putstatic Hitreg.lastAttackWasBlocked:Z
+    472: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+    475: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    478: invokestatic MultiVersion.getBasePosition:(Lnet/minecraft/world/entity/Entity;)Lnet/minecraft/world/phys/Vec3;
+    481: putstatic Hitreg.lastAttackLocation:Lnet/minecraft/world/phys/Vec3;
+    484: invokestatic System.currentTimeMillis:()J
+    487: putstatic Hitreg.lastAttack:J
+    490: aload_1
+    491: invokevirtual Entity.getId:()I
+    494: putstatic Hitreg.lastTarget:I
+    497: aload #6
+    499: getfield Hit.tooEarlyForSpecial:Z
+    502: ifeq -> 511
+    505: invokestatic MultiVersion.hasKnockback:()Z
+    508: ifeq -> 515
+    511: iconst_0
+    512: putstatic Hitreg.serverSprinting:Z
+    515: iconst_0
+    516: putstatic Hitreg.alreadyAnimated:Z
+    519: iconst_0
+    520: putstatic Hitreg.alreadyKnockedBack:Z
+    523: getstatic Hitreg.yourHits:I
+    526: iconst_1
+    527: iadd
+    528: putstatic Hitreg.yourHits:I
+    531: invokestatic Hitreg.updateFightState:()V
+    534: getstatic Hitreg.lastTickInRange:I
+    537: getstatic Hitreg.tick:I
+    540: if_icmpne -> 560
+    543: getstatic Hitreg.lastTickOutOfRange:I
+    546: getstatic Hitreg.tick:I
+    549: iconst_1
+    550: isub
+    551: if_icmpne -> 560
+    554: invokestatic System.currentTimeMillis:()J
+    557: putstatic Hitreg.lastPerfectHit:J
+    560: aload #6
+    562: invokevirtual Hit.load:()V
+    565: return
+
+== ChunkMixin.onPrepareChunkRenders (Matrix4fc, boolean, CallbackInfoReturnable) -> void
+   @Inject {"method": ["prepareChunkRenders"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}]}
+      0: getstatic Toggle.VOID_WORLD:Lyou/jass/betterhitreg/settings/Toggle;
+      3: invokevirtual Toggle.toggled:()Z
+      6: ifeq -> 34
+      9: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     12: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     15: ifnull -> 34
+     18: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     21: getfield Minecraft.level:Lnet/minecraft/client/multiplayer/ClientLevel;
+     24: ifnull -> 34
+     27: aload_0
+     28: getfield ChunkMixin.visibleSections:Lit/unimi/dsi/fastutil/objects/ObjectArrayList;
+     31: invokevirtual ObjectArrayList.clear:()V
+     34: return
+
+== ChunkMixin.onPrepareChunkRendersIndirect (Matrix4fc, boolean, CallbackInfoReturnable) -> void
+   @Inject {"method": ["prepareChunkRendersIndirect"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}]}
+      0: getstatic Toggle.VOID_WORLD:Lyou/jass/betterhitreg/settings/Toggle;
+      3: invokevirtual Toggle.toggled:()Z
+      6: ifeq -> 34
+      9: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     12: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     15: ifnull -> 34
+     18: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     21: getfield Minecraft.level:Lnet/minecraft/client/multiplayer/ClientLevel;
+     24: ifnull -> 34
+     27: aload_0
+     28: getfield ChunkMixin.visibleSections:Lit/unimi/dsi/fastutil/objects/ObjectArrayList;
+     31: invokevirtual ObjectArrayList.clear:()V
+     34: return
+
+== DamageMixin.handleDamageEvent (SoundEvent, DamageSource) -> SoundEvent
+   @ModifyVariable {"method": ["handleDamageEvent(Lnet/minecraft/world/damagesource/DamageSource;)V"], "at": {"value": "INVOKE_ASSIGN", "target": "Lnet/minecraft/world/entity/LivingEntity;getHurtSound(Lnet/minecraft/world/damagesource/DamageSource;)Lnet/minecraft/sounds/SoundEvent;"}, "ordinal": 0}
+      0: aload_0
+      1: checkcast net/minecraft/world/entity/LivingEntity
+      4: astore_3
+      5: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+      8: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     11: ifnull -> 34
+     14: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     17: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     20: invokevirtual LocalPlayer.getId:()I
+     23: aload_3
+     24: invokevirtual LivingEntity.getId:()I
+     27: if_icmpne -> 34
+     30: iconst_1
+     31: goto -> 35
+     34: iconst_0
+     35: istore #4
+     37: getstatic Toggle.SILENCE_THEM:Lyou/jass/betterhitreg/settings/Toggle;
+     40: invokevirtual Toggle.toggled:()Z
+     43: ifeq -> 55
+     46: iload #4
+     48: ifeq -> 55
+     51: aconst_null
+     52: goto -> 56
+     55: aload_1
+     56: areturn
+
+== DamageMixin.handleDamageEvent (DamageSource, CallbackInfo) -> void
+   @Inject {"method": ["handleDamageEvent"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: aload_1
+      1: instanceof you/jass/betterhitreg/utility/DontAnimate
+      4: ifeq -> 74
+      7: aload_0
+      8: checkcast net/minecraft/world/entity/LivingEntity
+     11: astore_3
+     12: aload_3
+     13: bipush 20
+     15: putfield LivingEntity.invulnerableTime:I
+     18: aload_0
+     19: aload_1
+     20: putfield DamageMixin.lastDamageSource:Lnet/minecraft/world/damagesource/DamageSource;
+     23: aload_0
+     24: aload_3
+     25: invokestatic MultiVersion.getLevelTime:(Lnet/minecraft/world/entity/Entity;)J
+     28: putfield DamageMixin.lastDamageStamp:J
+     31: getstatic Toggle.SILENCE_THEM:Lyou/jass/betterhitreg/settings/Toggle;
+     34: invokevirtual Toggle.toggled:()Z
+     37: ifne -> 70
+     40: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     43: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     46: ifnull -> 70
+     49: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     52: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     55: invokevirtual LocalPlayer.getId:()I
+     58: aload_3
+     59: invokevirtual LivingEntity.getId:()I
+     62: if_icmpne -> 70
+     65: aload_0
+     66: aload_1
+     67: invokevirtual DamageMixin.playHurtSound:(Lnet/minecraft/world/damagesource/DamageSource;)V
+     70: aload_2
+     71: invokevirtual CallbackInfo.cancel:()V
+     74: aload_1
+     75: instanceof you/jass/betterhitreg/utility/OnlyAnimate
+     78: ifeq -> 108
+     81: aload_0
+     82: getfield DamageMixin.walkAnimation:Lnet/minecraft/world/entity/WalkAnimationState;
+     85: ldc 1.5
+     87: invokevirtual WalkAnimationState.setSpeed:(F)V
+     90: aload_0
+     91: bipush 10
+     93: putfield DamageMixin.hurtDuration:I
+     96: aload_0
+     97: aload_0
+     98: getfield DamageMixin.hurtDuration:I
+    101: putfield DamageMixin.hurtTime:I
+    104: aload_2
+    105: invokevirtual CallbackInfo.cancel:()V
+    108: return
+
+== EntityMixin.head (double, double, CallbackInfo) -> void
+   @Inject {"method": ["turn"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "order": 2147483647}
+      0: aload_0
+      1: checkcast net/minecraft/world/entity/Entity
+      4: astore #6
+      6: getstatic Toggle.DEBUG_INPUTS:Lyou/jass/betterhitreg/settings/Toggle;
+      9: invokevirtual Toggle.toggled:()Z
+     12: ifeq -> 26
+     15: invokestatic Minecraft.getInstance:()Lnet/minecraft/client/Minecraft;
+     18: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     21: aload #6
+     23: if_acmpeq -> 27
+     26: return
+     27: aload_0
+     28: aload #6
+     30: invokevirtual Entity.getYRot:()F
+     33: putfield EntityMixin.checkYaw:F
+     36: aload_0
+     37: aload #6
+     39: invokevirtual Entity.getXRot:()F
+     42: putfield EntityMixin.checkPitch:F
+     45: aload_0
+     46: dload_1
+     47: putfield EntityMixin.checkTurnYaw:D
+     50: aload_0
+     51: dload_3
+     52: putfield EntityMixin.checkTurnPitch:D
+     55: dload_1
+     56: dload_3
+     57: invokestatic InputTracker.checkTurn:(DD)V
+     60: return
+
+== EntityMixin.afterXRot (double, double, CallbackInfo) -> void
+   @Inject {"method": ["turn"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "INVOKE", "target": "Lnet/minecraft/world/entity/Entity;setXRot(F)V", "ordinal": 0, "shift": "AFTER"}}], "order": 2147483647}
+      0: aload_0
+      1: checkcast net/minecraft/world/entity/Entity
+      4: astore #6
+      6: getstatic Toggle.DEBUG_INPUTS:Lyou/jass/betterhitreg/settings/Toggle;
+      9: invokevirtual Toggle.toggled:()Z
+     12: ifeq -> 32
+     15: invokestatic Minecraft.getInstance:()Lnet/minecraft/client/Minecraft;
+     18: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     21: aload #6
+     23: if_acmpne -> 32
+     26: invokestatic InputTracker.hasExpectedTurn:()Z
+     29: ifne -> 33
+     32: return
+     33: aload_0
+     34: getfield EntityMixin.checkPitch:F
+     37: aload_0
+     38: getfield EntityMixin.checkTurnPitch:D
+     41: d2f
+     42: ldc 0.15000000596046448
+     44: fmul
+     45: fadd
+     46: fstore #7
+     48: aload #6
+     50: invokevirtual Entity.getXRot:()F
+     53: fload #7
+     55: fsub
+     56: invokestatic Math.abs:(F)F
+     59: ldc 9.999999747378752e-05
+     61: fcmpl
+     62: ifle -> 68
+     65: invokestatic InputTracker.flagMouseY:()V
+     68: return
+
+== EntityMixin.afterYRot (double, double, CallbackInfo) -> void
+   @Inject {"method": ["turn"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "INVOKE", "target": "Lnet/minecraft/world/entity/Entity;setYRot(F)V", "ordinal": 0, "shift": "AFTER"}}], "order": 2147483647}
+      0: aload_0
+      1: checkcast net/minecraft/world/entity/Entity
+      4: astore #6
+      6: getstatic Toggle.DEBUG_INPUTS:Lyou/jass/betterhitreg/settings/Toggle;
+      9: invokevirtual Toggle.toggled:()Z
+     12: ifeq -> 32
+     15: invokestatic Minecraft.getInstance:()Lnet/minecraft/client/Minecraft;
+     18: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     21: aload #6
+     23: if_acmpne -> 32
+     26: invokestatic InputTracker.hasExpectedTurn:()Z
+     29: ifne -> 33
+     32: return
+     33: aload_0
+     34: getfield EntityMixin.checkYaw:F
+     37: aload_0
+     38: getfield EntityMixin.checkTurnYaw:D
+     41: d2f
+     42: ldc 0.15000000596046448
+     44: fmul
+     45: fadd
+     46: fstore #7
+     48: aload #6
+     50: invokevirtual Entity.getYRot:()F
+     53: fload #7
+     55: fsub
+     56: invokestatic Math.abs:(F)F
+     59: ldc 9.999999747378752e-05
+     61: fcmpl
+     62: ifle -> 68
+     65: invokestatic InputTracker.flagMouseX:()V
+     68: return
+
+== EntityMixin.afterClamp (double, double, CallbackInfo) -> void
+   @Inject {"method": ["turn"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "INVOKE", "target": "Lnet/minecraft/world/entity/Entity;setXRot(F)V", "ordinal": 1, "shift": "AFTER"}}], "order": 2147483647}
+      0: aload_0
+      1: checkcast net/minecraft/world/entity/Entity
+      4: astore #6
+      6: getstatic Toggle.DEBUG_INPUTS:Lyou/jass/betterhitreg/settings/Toggle;
+      9: invokevirtual Toggle.toggled:()Z
+     12: ifeq -> 32
+     15: invokestatic Minecraft.getInstance:()Lnet/minecraft/client/Minecraft;
+     18: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     21: aload #6
+     23: if_acmpne -> 32
+     26: invokestatic InputTracker.hasExpectedTurn:()Z
+     29: ifne -> 33
+     32: return
+     33: ldc -90.0
+     35: ldc 90.0
+     37: aload_0
+     38: getfield EntityMixin.checkPitch:F
+     41: aload_0
+     42: getfield EntityMixin.checkTurnPitch:D
+     45: d2f
+     46: ldc 0.15000000596046448
+     48: fmul
+     49: fadd
+     50: invokestatic Math.min:(FF)F
+     53: invokestatic Math.max:(FF)F
+     56: fstore #7
+     58: aload #6
+     60: invokevirtual Entity.getXRot:()F
+     63: fload #7
+     65: fsub
+     66: invokestatic Math.abs:(F)F
+     69: ldc 9.999999747378752e-05
+     71: fcmpl
+     72: ifle -> 78
+     75: invokestatic InputTracker.flagMouseY:()V
+     78: return
+
+== EntityMixin.tail (double, double, CallbackInfo) -> void
+   @Inject {"method": ["turn"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "TAIL"}}], "order": 2147483647}
+      0: aload_0
+      1: checkcast net/minecraft/world/entity/Entity
+      4: astore #6
+      6: getstatic Toggle.DEBUG_INPUTS:Lyou/jass/betterhitreg/settings/Toggle;
+      9: invokevirtual Toggle.toggled:()Z
+     12: ifeq -> 32
+     15: invokestatic Minecraft.getInstance:()Lnet/minecraft/client/Minecraft;
+     18: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     21: aload #6
+     23: if_acmpne -> 32
+     26: invokestatic InputTracker.hasExpectedTurn:()Z
+     29: ifne -> 33
+     32: return
+     33: aload_0
+     34: getfield EntityMixin.checkYaw:F
+     37: aload_0
+     38: getfield EntityMixin.checkTurnYaw:D
+     41: d2f
+     42: ldc 0.15000000596046448
+     44: fmul
+     45: fadd
+     46: fstore #7
+     48: ldc -90.0
+     50: ldc 90.0
+     52: aload_0
+     53: getfield EntityMixin.checkPitch:F
+     56: aload_0
+     57: getfield EntityMixin.checkTurnPitch:D
+     60: d2f
+     61: ldc 0.15000000596046448
+     63: fmul
+     64: fadd
+     65: invokestatic Math.min:(FF)F
+     68: invokestatic Math.max:(FF)F
+     71: fstore #8
+     73: aload #6
+     75: invokevirtual Entity.getYRot:()F
+     78: fload #7
+     80: fsub
+     81: invokestatic Math.abs:(F)F
+     84: ldc 9.999999747378752e-05
+     86: fcmpl
+     87: ifle -> 93
+     90: invokestatic InputTracker.flagMouseX:()V
+     93: aload #6
+     95: invokevirtual Entity.getXRot:()F
+     98: fload #8
+    100: fsub
+    101: invokestatic Math.abs:(F)F
+    104: ldc 9.999999747378752e-05
+    106: fcmpl
+    107: ifle -> 113
+    110: invokestatic InputTracker.flagMouseY:()V
+    113: invokestatic InputTracker.clearExpectedTurn:()V
+    116: return
+
+== GLFWMixin.pollEvents (CallbackInfo) -> void
+   @Inject {"method": ["pollEvents"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "RETURN"}}]}
+      0: getstatic Toggle.DEBUG_INPUTS:Lyou/jass/betterhitreg/settings/Toggle;
+      3: invokevirtual Toggle.toggled:()Z
+      6: ifeq -> 12
+      9: invokestatic InputTracker.update:()V
+     12: return
+
+== GLFWMixin.onMouseMotion (SDL_Event, CallbackInfo) -> void
+   @Inject {"method": ["handleMouseMotionEvent"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}]}
+      0: getstatic Toggle.DEBUG_INPUTS:Lyou/jass/betterhitreg/settings/Toggle;
+      3: invokevirtual Toggle.toggled:()Z
+      6: ifeq -> 26
+      9: aload_1
+     10: invokevirtual SDL_Event.motion:()Lorg/lwjgl/sdl/SDL_MouseMotionEvent;
+     13: invokevirtual SDL_MouseMotionEvent.xrel:()F
+     16: aload_1
+     17: invokevirtual SDL_Event.motion:()Lorg/lwjgl/sdl/SDL_MouseMotionEvent;
+     20: invokevirtual SDL_MouseMotionEvent.yrel:()F
+     23: invokestatic InputTracker.onRawMove:(FF)V
+     26: return
+
+== GlowMixin.glow (CallbackInfoReturnable) -> void
+   @Inject {"method": ["getTeamColor"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "RETURN"}}], "cancellable": 1}
+      0: getstatic Hitreg.withinFight:Z
+      3: ifeq -> 37
+      6: aload_0
+      7: getfield GlowMixin.id:I
+     10: getstatic Hitreg.target:Lnet/minecraft/world/entity/LivingEntity;
+     13: invokevirtual LivingEntity.getId:()I
+     16: if_icmpne -> 37
+     19: getstatic Toggle.RENDER_HITBOX:Lyou/jass/betterhitreg/settings/Toggle;
+     22: invokevirtual Toggle.toggled:()Z
+     25: ifne -> 37
+     28: getstatic Toggle.RENDER_SERVER_HITBOX:Lyou/jass/betterhitreg/settings/Toggle;
+     31: invokevirtual Toggle.toggled:()Z
+     34: ifeq -> 38
+     37: return
+     38: getstatic Toggle.PERFECT_HIT_COLOR:Lyou/jass/betterhitreg/settings/Toggle;
+     41: invokevirtual Toggle.toggled:()Z
+     44: ifeq -> 77
+     47: invokestatic System.currentTimeMillis:()J
+     50: getstatic Hitreg.lastPerfectHit:J
+     53: lsub
+     54: ldc2_w 500
+     57: lcmp
+     58: ifgt -> 77
+     61: aload_1
+     62: getstatic Style.PERFECT_HIT:Lyou/jass/betterhitreg/settings/Style;
+     65: invokevirtual Style.argb:()I
+     68: invokestatic Integer.valueOf:(I)Ljava/lang/Integer;
+     71: invokevirtual CallbackInfoReturnable.setReturnValue:(Ljava/lang/Object;)V
+     74: goto -> 113
+     77: getstatic Toggle.JUMP_RESET_COLOR:Lyou/jass/betterhitreg/settings/Toggle;
+     80: invokevirtual Toggle.toggled:()Z
+     83: ifeq -> 113
+     86: invokestatic System.currentTimeMillis:()J
+     89: getstatic Hitreg.lastJumpReset:J
+     92: lsub
+     93: ldc2_w 500
+     96: lcmp
+     97: ifgt -> 113
+    100: aload_1
+    101: getstatic Style.JUMP_RESET:Lyou/jass/betterhitreg/settings/Style;
+    104: invokevirtual Style.argb:()I
+    107: invokestatic Integer.valueOf:(I)Ljava/lang/Integer;
+    110: invokevirtual CallbackInfoReturnable.setReturnValue:(Ljava/lang/Object;)V
+    113: return
+
+== GlowMixin.isGlow (CallbackInfoReturnable) -> void
+   @Inject {"method": ["isCurrentlyGlowing"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "RETURN"}}], "cancellable": 1}
+      0: getstatic Hitreg.withinFight:Z
+      3: ifeq -> 37
+      6: aload_0
+      7: getfield GlowMixin.id:I
+     10: getstatic Hitreg.target:Lnet/minecraft/world/entity/LivingEntity;
+     13: invokevirtual LivingEntity.getId:()I
+     16: if_icmpne -> 37
+     19: getstatic Toggle.RENDER_HITBOX:Lyou/jass/betterhitreg/settings/Toggle;
+     22: invokevirtual Toggle.toggled:()Z
+     25: ifne -> 37
+     28: getstatic Toggle.RENDER_SERVER_HITBOX:Lyou/jass/betterhitreg/settings/Toggle;
+     31: invokevirtual Toggle.toggled:()Z
+     34: ifeq -> 38
+     37: return
+     38: getstatic Toggle.PERFECT_HIT_COLOR:Lyou/jass/betterhitreg/settings/Toggle;
+     41: invokevirtual Toggle.toggled:()Z
+     44: ifeq -> 72
+     47: invokestatic System.currentTimeMillis:()J
+     50: getstatic Hitreg.lastPerfectHit:J
+     53: lsub
+     54: ldc2_w 500
+     57: lcmp
+     58: ifgt -> 72
+     61: aload_1
+     62: iconst_1
+     63: invokestatic Boolean.valueOf:(Z)Ljava/lang/Boolean;
+     66: invokevirtual CallbackInfoReturnable.setReturnValue:(Ljava/lang/Object;)V
+     69: goto -> 103
+     72: getstatic Toggle.JUMP_RESET_COLOR:Lyou/jass/betterhitreg/settings/Toggle;
+     75: invokevirtual Toggle.toggled:()Z
+     78: ifeq -> 103
+     81: invokestatic System.currentTimeMillis:()J
+     84: getstatic Hitreg.lastJumpReset:J
+     87: lsub
+     88: ldc2_w 500
+     91: lcmp
+     92: ifgt -> 103
+     95: aload_1
+     96: iconst_1
+     97: invokestatic Boolean.valueOf:(Z)Ljava/lang/Boolean;
+    100: invokevirtual CallbackInfoReturnable.setReturnValue:(Ljava/lang/Object;)V
+    103: return
+
+== LocalPlayerAccessor.getWasSprinting () -> boolean
+   @Accessor {"value": "wasSprinting"}
+   (no code)
+
+== MouseMixin.onMove (long, double, double, double, double, CallbackInfo) -> void
+   @Inject {"method": ["onMove"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}]}
+      0: getstatic Toggle.DEBUG_INPUTS:Lyou/jass/betterhitreg/settings/Toggle;
+      3: invokevirtual Toggle.toggled:()Z
+      6: ifeq -> 24
+      9: lload_1
+     10: aload_0
+     11: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+     14: invokevirtual Minecraft.getWindow:()Lcom/mojang/blaze3d/platform/Window;
+     17: invokevirtual Window.handle:()J
+     20: lcmp
+     21: ifeq -> 25
+     24: return
+     25: aload_0
+     26: dup
+     27: getfield MouseMixin.simDX:D
+     30: dload #7
+     32: dadd
+     33: putfield MouseMixin.simDX:D
+     36: aload_0
+     37: dup
+     38: getfield MouseMixin.simDY:D
+     41: dload #9
+     43: dadd
+     44: putfield MouseMixin.simDY:D
+     47: return
+
+== MouseMixin.simulate (CallbackInfo) -> void
+   @Inject {"method": ["handleAccumulatedMovement"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}]}
+      0: getstatic Toggle.DEBUG_INPUTS:Lyou/jass/betterhitreg/settings/Toggle;
+      3: invokevirtual Toggle.toggled:()Z
+      6: ifne -> 10
+      9: return
+     10: invokestatic Blaze3D.getTime:()D
+     13: dstore_2
+     14: dload_2
+     15: aload_0
+     16: getfield MouseMixin.lastTime:D
+     19: dsub
+     20: dstore #4
+     22: aload_0
+     23: dload_2
+     24: putfield MouseMixin.lastTime:D
+     27: aload_0
+     28: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+     31: invokevirtual Minecraft.isWindowActive:()Z
+     34: ifeq -> 60
+     37: aload_0
+     38: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+     41: getfield Minecraft.mouseHandler:Lnet/minecraft/client/MouseHandler;
+     44: invokevirtual MouseHandler.isMouseGrabbed:()Z
+     47: ifeq -> 60
+     50: aload_0
+     51: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+     54: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     57: ifnonnull -> 71
+     60: aload_0
+     61: aload_0
+     62: dconst_0
+     63: dup2_x1
+     64: putfield MouseMixin.simDY:D
+     67: putfield MouseMixin.simDX:D
+     70: return
+     71: aload_0
+     72: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+     75: getfield Minecraft.options:Lnet/minecraft/client/Options;
+     78: invokevirtual Options.sensitivity:()Lnet/minecraft/client/OptionInstance;
+     81: invokevirtual OptionInstance.get:()Ljava/lang/Object;
+     84: checkcast java/lang/Double
+     87: invokevirtual Double.doubleValue:()D
+     90: ldc2_w 0.6
+     93: dmul
+     94: ldc2_w 0.2
+     97: dadd
+     98: dstore #6
+    100: dload #6
+    102: dload #6
+    104: dmul
+    105: dload #6
+    107: dmul
+    108: dstore #8
+    110: dload #8
+    112: ldc2_w 8.0
+    115: dmul
+    116: dstore #10
+    118: aload_0
+    119: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+    122: getfield Minecraft.options:Lnet/minecraft/client/Options;
+    125: getfield Options.smoothCamera:Z
+    128: ifeq -> 176
+    131: aload_0
+    132: getfield MouseMixin.smoothX:Lnet/minecraft/util/SmoothDouble;
+    135: aload_0
+    136: getfield MouseMixin.simDX:D
+    139: dload #10
+    141: dmul
+    142: dload #4
+    144: dload #10
+    146: dmul
+    147: invokevirtual SmoothDouble.getNewDeltaValue:(DD)D
+    150: dstore #12
+    152: aload_0
+    153: getfield MouseMixin.smoothY:Lnet/minecraft/util/SmoothDouble;
+    156: aload_0
+    157: getfield MouseMixin.simDY:D
+    160: dload #10
+    162: dmul
+    163: dload #4
+    165: dload #10
+    167: dmul
+    168: invokevirtual SmoothDouble.getNewDeltaValue:(DD)D
+    171: dstore #14
+    173: goto -> 272
+    176: aload_0
+    177: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+    180: getfield Minecraft.options:Lnet/minecraft/client/Options;
+    183: invokevirtual Options.getCameraType:()Lnet/minecraft/client/CameraType;
+    186: invokevirtual CameraType.isFirstPerson:()Z
+    189: ifeq -> 240
+    192: aload_0
+    193: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+    196: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+    199: invokevirtual LocalPlayer.isScoping:()Z
+    202: ifeq -> 240
+    205: aload_0
+    206: getfield MouseMixin.smoothX:Lnet/minecraft/util/SmoothDouble;
+    209: invokevirtual SmoothDouble.reset:()V
+    212: aload_0
+    213: getfield MouseMixin.smoothY:Lnet/minecraft/util/SmoothDouble;
+    216: invokevirtual SmoothDouble.reset:()V
+    219: aload_0
+    220: getfield MouseMixin.simDX:D
+    223: dload #8
+    225: dmul
+    226: dstore #12
+    228: aload_0
+    229: getfield MouseMixin.simDY:D
+    232: dload #8
+    234: dmul
+    235: dstore #14
+    237: goto -> 272
+    240: aload_0
+    241: getfield MouseMixin.smoothX:Lnet/minecraft/util/SmoothDouble;
+    244: invokevirtual SmoothDouble.reset:()V
+    247: aload_0
+    248: getfield MouseMixin.smoothY:Lnet/minecraft/util/SmoothDouble;
+    251: invokevirtual SmoothDouble.reset:()V
+    254: aload_0
+    255: getfield MouseMixin.simDX:D
+    258: dload #10
+    260: dmul
+    261: dstore #12
+    263: aload_0
+    264: getfield MouseMixin.simDY:D
+    267: dload #10
+    269: dmul
+    270: dstore #14
+    272: aload_0
+    273: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+    276: getfield Minecraft.options:Lnet/minecraft/client/Options;
+    279: invokevirtual Options.invertMouseX:()Lnet/minecraft/client/OptionInstance;
+    282: invokevirtual OptionInstance.get:()Ljava/lang/Object;
+    285: checkcast java/lang/Boolean
+    288: invokevirtual Boolean.booleanValue:()Z
+    291: ifeq -> 300
+    294: dload #12
+    296: dneg
+    297: goto -> 302
+    300: dload #12
+    302: dstore #16
+    304: aload_0
+    305: getfield MouseMixin.minecraft:Lnet/minecraft/client/Minecraft;
+    308: getfield Minecraft.options:Lnet/minecraft/client/Options;
+    311: invokevirtual Options.invertMouseY:()Lnet/minecraft/client/OptionInstance;
+    314: invokevirtual OptionInstance.get:()Ljava/lang/Object;
+    317: checkcast java/lang/Boolean
+    320: invokevirtual Boolean.booleanValue:()Z
+    323: ifeq -> 332
+    326: dload #14
+    328: dneg
+    329: goto -> 334
+    332: dload #14
+    334: dstore #18
+    336: dload #16
+    338: dload #18
+    340: invokestatic InputTracker.setExpectedTurn:(DD)V
+    343: aload_0
+    344: aload_0
+    345: dconst_0
+    346: dup2_x1
+    347: putfield MouseMixin.simDY:D
+    350: putfield MouseMixin.simDX:D
+    353: return
+
+== NetworkMixin.handleDamageEvent (DamageSource) -> DamageSource
+   @ModifyArg {"method": ["handleDamageEvent(Lnet/minecraft/network/protocol/game/ClientboundDamageEventPacket;)V"], "at": {"value": "INVOKE", "target": "Lnet/minecraft/world/entity/Entity;handleDamageEvent(Lnet/minecraft/world/damagesource/DamageSource;)V"}}
+      0: getstatic Toggle.HIDE_ANIMATIONS:Lyou/jass/betterhitreg/settings/Toggle;
+      3: invokevirtual Toggle.toggled:()Z
+      6: ifeq -> 18
+      9: new you/jass/betterhitreg/utility/DontAnimate
+     12: dup
+     13: aload_1
+     14: invokespecial DontAnimate.<init>:(Lnet/minecraft/world/damagesource/DamageSource;)V
+     17: areturn
+     18: aload_1
+     19: ifnull -> 92
+     22: aload_1
+     23: invokevirtual DamageSource.getEntity:()Lnet/minecraft/world/entity/Entity;
+     26: ifnull -> 92
+     29: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     32: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     35: ifnull -> 92
+     38: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     41: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     44: invokevirtual LocalPlayer.getId:()I
+     47: aload_1
+     48: invokevirtual DamageSource.getEntity:()Lnet/minecraft/world/entity/Entity;
+     51: invokevirtual Entity.getId:()I
+     54: if_icmpne -> 92
+     57: getstatic Hitreg.lastHitHandled:Z
+     60: ifeq -> 92
+     63: getstatic Hitreg.withinFight:Z
+     66: ifeq -> 92
+     69: invokestatic System.currentTimeMillis:()J
+     72: getstatic Hitreg.lastAttack:J
+     75: lsub
+     76: ldc2_w 1000
+     79: lcmp
+     80: ifgt -> 92
+     83: new you/jass/betterhitreg/utility/DontAnimate
+     86: dup
+     87: aload_1
+     88: invokespecial DontAnimate.<init>:(Lnet/minecraft/world/damagesource/DamageSource;)V
+     91: areturn
+     92: aload_1
+     93: areturn
+
+== ParticleMixin.onCreateParticle (ParticleOptions, double, double, double, double, double, double, CallbackInfoReturnable) -> void
+   @Inject {"method": ["makeParticle(Lnet/minecraft/core/particles/ParticleOptions;DDDDDD)Lnet/minecraft/client/particle/Particle;"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: aload_1
+      1: invokeinterface ParticleOptions.getType:()Lnet/minecraft/core/particles/ParticleType;
+      6: getstatic ParticleTypes.FIREWORK:Lnet/minecraft/core/particles/SimpleParticleType;
+      9: if_acmpne -> 13
+     12: return
+     13: getstatic Toggle.HIDE_ALL_PARTICLES:Lyou/jass/betterhitreg/settings/Toggle;
+     16: invokevirtual Toggle.toggled:()Z
+     19: ifeq -> 31
+     22: aload #14
+     24: aconst_null
+     25: invokevirtual CallbackInfoReturnable.setReturnValue:(Ljava/lang/Object;)V
+     28: goto -> 118
+     31: getstatic Toggle.HIDE_OTHER_PARTICLES:Lyou/jass/betterhitreg/settings/Toggle;
+     34: invokevirtual Toggle.toggled:()Z
+     37: ifeq -> 73
+     40: aload_1
+     41: invokeinterface ParticleOptions.getType:()Lnet/minecraft/core/particles/ParticleType;
+     46: getstatic ParticleTypes.CRIT:Lnet/minecraft/core/particles/SimpleParticleType;
+     49: if_acmpeq -> 73
+     52: aload_1
+     53: invokeinterface ParticleOptions.getType:()Lnet/minecraft/core/particles/ParticleType;
+     58: getstatic ParticleTypes.SWEEP_ATTACK:Lnet/minecraft/core/particles/SimpleParticleType;
+     61: if_acmpeq -> 73
+     64: aload #14
+     66: aconst_null
+     67: invokevirtual CallbackInfoReturnable.setReturnValue:(Ljava/lang/Object;)V
+     70: goto -> 118
+     73: getstatic Toggle.HIDE_OTHER_FIGHTS:Lyou/jass/betterhitreg/settings/Toggle;
+     76: invokevirtual Toggle.toggled:()Z
+     79: ifeq -> 118
+     82: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     85: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     88: ifnull -> 118
+     91: getstatic Hitreg.client:Lnet/minecraft/client/Minecraft;
+     94: getfield Minecraft.player:Lnet/minecraft/client/player/LocalPlayer;
+     97: dload_2
+     98: dload #4
+    100: dload #6
+    102: invokevirtual LocalPlayer.distanceToSqr:(DDD)D
+    105: ldc2_w 30.0
+    108: dcmpl
+    109: ifle -> 118
+    112: aload #14
+    114: aconst_null
+    115: invokevirtual CallbackInfoReturnable.setReturnValue:(Ljava/lang/Object;)V
+    118: return
+
+== PlayerMixin.crit (Entity, CallbackInfo) -> void
+   @Inject {"method": ["crit"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: invokestatic Hitreg.isToggled:()Z
+      3: ifeq -> 10
+      6: aload_2
+      7: invokevirtual CallbackInfo.cancel:()V
+     10: return
+
+== PlayerMixin.magicCrit (Entity, CallbackInfo) -> void
+   @Inject {"method": ["magicCrit"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: invokestatic Hitreg.isToggled:()Z
+      3: ifeq -> 10
+      6: aload_2
+      7: invokevirtual CallbackInfo.cancel:()V
+     10: return
+
+== RenderMixin.entity (Entity, Frustum, double, double, double, float, CallbackInfoReturnable) -> void
+   @Inject {"method": ["shouldRender"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: aload_0
+      1: aload_1
+      2: aload #10
+      4: invokevirtual RenderMixin.shouldRender:(Lnet/minecraft/world/entity/Entity;Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable;)V
+      7: return
+
+== ServerMixin.handleDamageEvent (ClientboundDamageEventPacket, CallbackInfo) -> void
+   @Inject {"method": ["handleDamageEvent(Lnet/minecraft/network/protocol/game/ClientboundDamageEventPacket;)V"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: aload_1
+      1: invokestatic PacketProcessor.processDamage:(Lnet/minecraft/network/protocol/game/ClientboundDamageEventPacket;)Z
+      4: ifne -> 11
+      7: aload_2
+      8: invokevirtual CallbackInfo.cancel:()V
+     11: return
+
+== ServerMixin.handleAnimate (ClientboundAnimatePacket, CallbackInfo) -> void
+   @Inject {"method": ["handleAnimate(Lnet/minecraft/network/protocol/game/ClientboundAnimatePacket;)V"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: invokestatic Minecraft.getInstance:()Lnet/minecraft/client/Minecraft;
+      3: invokevirtual Minecraft.isSameThread:()Z
+      6: ifne -> 10
+      9: return
+     10: aload_1
+     11: invokestatic PacketProcessor.processAnimation:(Lnet/minecraft/network/protocol/game/ClientboundAnimatePacket;)Z
+     14: ifne -> 21
+     17: aload_2
+     18: invokevirtual CallbackInfo.cancel:()V
+     21: return
+
+== ServerMixin.handleSoundEvent (ClientboundSoundPacket, CallbackInfo) -> void
+   @Inject {"method": ["handleSoundEvent(Lnet/minecraft/network/protocol/game/ClientboundSoundPacket;)V"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: invokestatic Minecraft.getInstance:()Lnet/minecraft/client/Minecraft;
+      3: invokevirtual Minecraft.isSameThread:()Z
+      6: ifne -> 16
+      9: aload_1
+     10: invokestatic PacketProcessor.stamp:(Lnet/minecraft/network/protocol/Packet;)V
+     13: goto -> 27
+     16: aload_1
+     17: invokestatic PacketProcessor.processSound:(Lnet/minecraft/network/protocol/Packet;)Z
+     20: ifne -> 27
+     23: aload_2
+     24: invokevirtual CallbackInfo.cancel:()V
+     27: return
+
+== ServerMixin.handleSoundEntityEvent (ClientboundSoundEntityPacket, CallbackInfo) -> void
+   @Inject {"method": ["handleSoundEntityEvent(Lnet/minecraft/network/protocol/game/ClientboundSoundEntityPacket;)V"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: invokestatic Minecraft.getInstance:()Lnet/minecraft/client/Minecraft;
+      3: invokevirtual Minecraft.isSameThread:()Z
+      6: ifne -> 16
+      9: aload_1
+     10: invokestatic PacketProcessor.stamp:(Lnet/minecraft/network/protocol/Packet;)V
+     13: goto -> 27
+     16: aload_1
+     17: invokestatic PacketProcessor.processSound:(Lnet/minecraft/network/protocol/Packet;)Z
+     20: ifne -> 27
+     23: aload_2
+     24: invokevirtual CallbackInfo.cancel:()V
+     27: return
+
+== SoundMixin.before (SoundInstance, CallbackInfoReturnable) -> void
+   @Inject {"method": ["play(Lnet/minecraft/client/resources/sounds/SoundInstance;)Lnet/minecraft/client/sounds/SoundEngine$PlayResult;"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "INVOKE", "target": "Lnet/minecraft/client/sounds/ChannelAccess$ChannelHandle;execute(Ljava/util/function/Consumer;)V", "ordinal": 0, "shift": "AFTER"}}]}
+      0: aload_1
+      1: ifnull -> 11
+      4: aload_1
+      5: invokestatic MultiVersion.getSoundPath:(Lnet/minecraft/client/resources/sounds/SoundInstance;)Ljava/lang/String;
+      8: ifnonnull -> 12
+     11: return
+     12: getstatic Hitreg.muffleAmount:F
+     15: fconst_0
+     16: fcmpl
+     17: ifne -> 28
+     20: getstatic Hitreg.sharpenAmount:F
+     23: fconst_0
+     24: fcmpl
+     25: ifeq -> 33
+     28: aload_0
+     29: aload_1
+     30: invokevirtual SoundMixin.filter:(Lnet/minecraft/client/resources/sounds/SoundInstance;)V
+     33: return
+
+== SoundMixin.play (SoundInstance, CallbackInfoReturnable) -> void
+   @Inject {"method": ["play(Lnet/minecraft/client/resources/sounds/SoundInstance;)Lnet/minecraft/client/sounds/SoundEngine$PlayResult;"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "HEAD"}}], "cancellable": 1}
+      0: aload_1
+      1: ifnull -> 23
+      4: aload_1
+      5: invokestatic MultiVersion.getSoundPath:(Lnet/minecraft/client/resources/sounds/SoundInstance;)Ljava/lang/String;
+      8: ifnull -> 23
+     11: aload_1
+     12: invokeinterface SoundInstance.getSource:()Lnet/minecraft/sounds/SoundSource;
+     17: getstatic SoundSource.PLAYERS:Lnet/minecraft/sounds/SoundSource;
+     20: if_acmpeq -> 24
+     23: return
+     24: aload_1
+     25: invokestatic MultiVersion.getSoundPath:(Lnet/minecraft/client/resources/sounds/SoundInstance;)Ljava/lang/String;
+     28: ldc "entity.player.attack"
+     30: invokevirtual String.startsWith:(Ljava/lang/String;)Z
+     33: ifeq -> 50
+     36: getstatic Toggle.LEGACY_SOUNDS:Lyou/jass/betterhitreg/settings/Toggle;
+     39: invokevirtual Toggle.toggled:()Z
+     42: ifeq -> 49
+     45: aload_2
+     46: invokevirtual CallbackInfoReturnable.cancel:()V
+     49: return
+     50: aload_1
+     51: invokestatic MultiVersion.getSoundPath:(Lnet/minecraft/client/resources/sounds/SoundInstance;)Ljava/lang/String;
+     54: ldc "entity.player.hurt"
+     56: invokevirtual String.startsWith:(Ljava/lang/String;)Z
+     59: ifeq -> 63
+     62: return
+     63: getstatic Toggle.SILENCE_NON_HITS:Lyou/jass/betterhitreg/settings/Toggle;
+     66: invokevirtual Toggle.toggled:()Z
+     69: ifeq -> 76
+     72: aload_2
+     73: invokevirtual CallbackInfoReturnable.cancel:()V
+     76: return
+
+== SourceMixin.play (CallbackInfo) -> void
+   @Inject {"method": ["play"], "at": [{"type": "Lorg/spongepowered/asm/mixin/injection/At;", "values": {"value": "TAIL"}}]}
+      0: invokestatic AL.getCapabilities:()Lorg/lwjgl/openal/ALCapabilities;
+      3: getfield ALCapabilities.ALC_EXT_EFX:Z
+      6: ifeq -> 15
+      9: getstatic Hitreg.shouldFilter:I
+     12: ifne -> 16
+     15: return
+     16: iconst_0
+     17: istore_2
+     18: iconst_0
+     19: istore_3
+     20: getstatic Hitreg.shouldFilter:I
+     23: ifle -> 104
+     26: getstatic Hitreg.shouldFilter:I
+     29: iconst_1
+     30: isub
+     31: putstatic Hitreg.shouldFilter:I
+     34: getstatic Hitreg.muffleAmount:F
+     37: fconst_0
+     38: fcmpl
+     39: ifeq -> 65
+     42: invokestatic EXTEfx.alGenFilters:()I
+     45: istore_2
+     46: iload_2
+     47: ldc 32769
+     49: iconst_1
+     50: invokestatic EXTEfx.alFilteri:(III)V
+     53: iload_2
+     54: iconst_2
+     55: fconst_1
+     56: getstatic Hitreg.muffleAmount:F
+     59: fsub
+     60: invokestatic EXTEfx.alFilterf:(IIF)V
+     63: iconst_1
+     64: istore_3
+     65: getstatic Hitreg.sharpenAmount:F
+     68: fconst_0
+     69: fcmpl
+     70: ifeq -> 104
+     73: getstatic Hitreg.shouldFilter:I
+     76: iconst_1
+     77: isub
+     78: putstatic Hitreg.shouldFilter:I
+     81: invokestatic EXTEfx.alGenFilters:()I
+     84: istore_2
+     85: iload_2
+     86: ldc 32769
+     88: iconst_2
+     89: invokestatic EXTEfx.alFilteri:(III)V
+     92: iload_2
+     93: iconst_2
+     94: fconst_1
+     95: getstatic Hitreg.sharpenAmount:F
+     98: fsub
+     99: invokestatic EXTEfx.alFilterf:(IIF)V
+    102: iconst_1
+    103: istore_3
+    104: iload_3
+    105: ifeq -> 118
+    108: aload_0
+    109: getfield SourceMixin.source:I
+    112: ldc 131077
+    114: iload_2
+    115: invokestatic AL10.alSourcei:(III)V
+    118: return
