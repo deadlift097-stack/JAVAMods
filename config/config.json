@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "enabled": true,
+  "menuEnabled": true,
+  "javaMods": true,
+  "tickEvent": true,
+  "maxScriptMs": 50,
+  "maxMemoryMb": 32,
+  "attackEvent": false,
+  "attackRva": ""
+}
