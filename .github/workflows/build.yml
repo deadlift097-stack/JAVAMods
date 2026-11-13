@@ -1418,7 +1418,7 @@ jobs:
               LuaMod *m = modOf(L);
               luaL_checktype(L, 1, LUA_TTABLE);
               if (m->hasMenu)
-          return luaL_error(L, "menu.register can only be called once per mod");
+                  return luaL_error(L, "menu.register can only be called once per mod");
 
               m->menuName = tableString(L, 1, "name", m->name.empty() ? m->id : m->name);
               m->menuDesc = tableString(L, 1, "description", m->description);
@@ -2295,7 +2295,6 @@ jobs:
             private:
               uintptr_t resolveAttackTarget();
               void startJava();
-              void installInput()
               void installInput();
               void installAttackHook();
 
@@ -2626,7 +2625,7 @@ jobs:
                       });
                       scheduler.setRemoveOnCancelPolicy(true);
 
-                      File[] jars = mods.listFiles((dir, name) -> name.toLowerCase.endsWith(".jar"));
+                      File[] jars = mods.listFiles((dir, name) -> name.toLowerCase().endsWith(".jar"));
                       if (jars != null) {
                           Arrays.sort(jars);
                           for (File jar : jars) {
@@ -3077,4 +3076,633 @@ jobs:
                   // ---- ModContext
 
                   @Override
-                
+                  public String id() {
+                      return id;
+                  }
+
+                  @Override
+                  public String name() {
+                      return name;
+                  }
+
+                  @Override
+                  public String version() {
+                      return version;
+                  }
+
+                  @Override
+                  public String author() {
+                      return author;
+                  }
+
+                  @Override
+                  public String description() {
+                      return description;
+                  }
+
+                  @Override
+                  public File dir() {
+                      return dir;
+                  }
+
+                  @Override
+                  public File dataDir() {
+                      return dataDir;
+                  }
+
+                  @Override
+                  public void log(String message) {
+                      logLine("INFO", id, message);
+                  }
+
+                  @Override
+                  public void warn(String message) {
+                      logLine("WARN", id, message);
+                  }
+
+                  @Override
+                  public void error(String message) {
+                      logLine("ERROR", id, message);
+                  }
+
+                  @Override
+                  public void onKey(ModContext.KeyHandler handler) {
+                      keyHandlers.add(handler);
+                  }
+
+                  @Override
+                  public void onTouch(ModContext.TouchHandler handler) {
+                      touchHandlers.add(handler);
+                  }
+
+                  @Override
+                  public void onMouse(ModContext.MouseHandler handler) {
+                      mouseHandlers.add(handler);
+                  }
+
+                  @Override
+                  public void onAttack(ModContext.AttackHandler handler) {
+                      attackHandlers.add(handler);
+                  }
+
+                  @Override
+                  public void onTick(ModContext.TickHandler handler) {
+                      tickHandlers.add(handler);
+                  }
+
+                  private Runnable guarded(Runnable task) {
+                      return () -> {
+                          synchronized (LOCK) {
+                              if (!running || !usable()) {
+                                  return;
+                              }
+                              try {
+                                  task.run();
+                              } catch (Throwable t) {
+                                  fail("timer", t);
+                              }
+                          }
+                      };
+                  }
+
+                  private TimerHandle track(ScheduledFuture<?> f) {
+                      timers.add(f);
+                      return () -> {
+                          f.cancel(false);
+                          timers.remove(f);
+                      };
+                  }
+
+                  @Override
+                  public TimerHandle after(long delayMs, Runnable task) {
+                      ScheduledThreadPoolExecutor s = scheduler;
+                      if (s == null || timers.size() >= MAX_TIMERS) {
+                          throw new IllegalStateException("cannot schedule more timers");
+                      }
+                      return track(s.schedule(guarded(task), Math.max(10, delayMs), TimeUnit.MILLISECONDS));
+                  }
+
+                  @Override
+                  public TimerHandle every(long periodMs, Runnable task) {
+                      ScheduledThreadPoolExecutor s = scheduler;
+                      if (s == null || timers.size() >= MAX_TIMERS) {
+                          throw new IllegalStateException("cannot schedule more timers");
+                      }
+                      long p = Math.max(10, periodMs);
+                      return track(s.scheduleWithFixedDelay(guarded(task), p, p, TimeUnit.MILLISECONDS));
+                  }
+
+                  @Override
+                  public void registerMenu(Menu m) {
+                      if (menu != null) {
+                          throw new IllegalStateException("registerMenu can only be called once");
+                      }
+                      if (m.settings().size() > MAX_SETTINGS) {
+                          throw new IllegalArgumentException("at most " + MAX_SETTINGS + " settings");
+                      }
+                      List<String> encoded = new ArrayList<>();
+                      for (Setting s : m.settings()) {
+                          if (!s.key.matches("[A-Za-z0-9_]{1,64}")) {
+                              throw new IllegalArgumentException("invalid setting key '" + s.key + "'");
+                          }
+                          defs.put(s.key, s);
+                          String saved = store.getProperty("setting." + s.key);
+                          String value = saved != null ? saved : s.defaultValue;
+                          values.put(s.key, value);
+                          encoded.add(s.key + "\u001f" + s.label + "\u001f" + s.type + "\u001f" + value + "\u001f" + s.min
+                                  + "\u001f" + s.max);
+                      }
+                      menu = m;
+                      enabled = m.enabled();
+                      moduleId = id + ".menu";
+                      NativeApi api = nativeApi;
+                      boolean ok = api != null
+                              && api.registerMenu(moduleId, m.name(), m.description(), m.enabled(),
+                                      encoded.toArray(new String[0]));
+                      if (!ok) {
+                          logLine("WARN", id, "the in-game menu could not be registered");
+                      }
+                  }
+
+                  @Override
+                  public Settings settings() {
+                      return new Settings() {
+                          @Override
+                          public boolean getBoolean(String key) {
+                              return "true".equals(values.get(key));
+                          }
+
+                          @Override
+                          public int getInt(String key) {
+                              return (int) parseDoubleOr(values.get(key), 0);
+                          }
+
+                          @Override
+                          public double getDouble(String key) {
+                              return parseDoubleOr(values.get(key), 0);
+                          }
+
+                          @Override
+                          public String getString(String key) {
+                              return values.get(key);
+                          }
+                      };
+                  }
+
+                  @Override
+                  public Storage storage() {
+                      return new Storage() {
+                          @Override
+                          public String getString(String key, String defaultValue) {
+                              return store.getProperty("u." + key, defaultValue);
+                          }
+
+                          @Override
+                          public long getLong(String key, long defaultValue) {
+                              String v = store.getProperty("u." + key);
+                              try {
+                                  return v == null ? defaultValue : Long.parseLong(v);
+                              } catch (NumberFormatException e) {
+                                  return defaultValue;
+                              }
+                          }
+
+                          @Override
+                          public boolean getBoolean(String key, boolean defaultValue) {
+                              String v = store.getProperty("u." + key);
+                              return v == null ? defaultValue : "true".equals(v);
+                          }
+
+                          @Override
+                          public void putString(String key, String value) {
+                              store.setProperty("u." + key, value);
+                              saveStore();
+                          }
+
+                          @Override
+                          public void putLong(String key, long value) {
+                              putString(key, Long.toString(value));
+                          }
+
+                          @Override
+                          public void putBoolean(String key, boolean value) {
+                              putString(key, Boolean.toString(value));
+                          }
+
+                          @Override
+                          public void remove(String key) {
+                              store.remove("u." + key);
+                              saveStore();
+                          }
+                      };
+                  }
+
+                  @Override
+                  public boolean isEnabled() {
+                      return enabled;
+                  }
+              }
+
+              static double parseDoubleOr(String s, double def) {
+                  try {
+                      return s == null ? def : Double.parseDouble(s.trim());
+                  } catch (NumberFormatException e) {
+                      return def;
+                  }
+              }
+          }
+          SRCEOF
+          cat > java/src/org/modhost/Menu.java <<'SRCEOF'
+          package org.modhost;
+
+          import java.util.ArrayList;
+          import java.util.Collections;
+          import java.util.List;
+
+          /** Describes the in-game menu module of a mod. Pass it to {@link ModContext#registerMenu}. */
+          public final class Menu {
+              /** Called when the module's on/off toggle changes. */
+              public interface ToggleListener {
+                  void onToggle(boolean enabled);
+              }
+
+              /** Called when a setting changes. The value is a Boolean, Integer or Double. */
+              public interface ChangeListener {
+                  void onChange(String key, Object value);
+              }
+
+              private final List<Setting> settings = new ArrayList<>();
+              private String name;
+              private String description = "";
+              private boolean enabled = true;
+              private ToggleListener toggleListener;
+              private ChangeListener changeListener;
+
+              public Menu(String name) {
+                  this.name = name;
+              }
+
+              public Menu description(String text) {
+                  this.description = text == null ? "" : text;
+                  return this;
+              }
+
+              /** Starting state of the module toggle. */
+              public Menu enabled(boolean value) {
+                  this.enabled = value;
+                  return this;
+              }
+
+              public Menu toggle(String key, String label, boolean defaultValue) {
+                  settings.add(new Setting(key, label, Setting.TOGGLE, String.valueOf(defaultValue), "", ""));
+                  return this;
+              }
+
+              public Menu slider(String key, String label, int defaultValue, int min, int max) {
+                  settings.add(new Setting(key, label, Setting.SLIDER, String.valueOf(defaultValue),
+                          String.valueOf(min), String.valueOf(max)));
+                  return this;
+              }
+
+              public Menu floatSlider(String key, String label, double defaultValue, double min, double max) {
+                  settings.add(new Setting(key, label, Setting.FLOAT, String.valueOf(defaultValue),
+                          String.valueOf(min), String.valueOf(max)));
+                  return this;
+              }
+
+              public Menu onToggle(ToggleListener listener) {
+                  this.toggleListener = listener;
+                  return this;
+              }
+
+              public Menu onChange(ChangeListener listener) {
+                  this.changeListener = listener;
+                  return this;
+              }
+
+              public String name() {
+                  return name;
+              }
+
+              public String description() {
+                  return description;
+              }
+
+              public boolean enabled() {
+                  return enabled;
+              }
+
+              public List<Setting> settings() {
+                  return Collections.unmodifiableList(settings);
+              }
+
+              public ToggleListener toggleListener() {
+                  return toggleListener;
+              }
+
+              public ChangeListener changeListener() {
+                  return changeListener;
+              }
+          }
+          SRCEOF
+          cat > java/src/org/modhost/Mod.java <<'SRCEOF'
+          package org.modhost;
+
+          /**
+           * Entry point of a Java mod. The jar must contain a "modhost-mod.properties" file whose
+           * "main" key names a public class implementing this interface (with a public no-argument
+           * constructor).
+           */
+          public interface Mod {
+              /** Called once after the jar is loaded. Register menus, events and timers here. */
+              void onLoad(ModContext ctx) throws Exception;
+
+              /** Called when the host stops (the game closes or the mod is disabled). */
+              default void onUnload() {}
+          }
+          SRCEOF
+          cat > java/src/org/modhost/ModContext.java <<'SRCEOF'
+          package org.modhost;
+
+          import java.io.File;
+
+          /** Everything a mod can do. Passed to {@link Mod#onLoad}. */
+          public interface ModContext {
+              /** Return true to consume the event. */
+              interface KeyHandler {
+                  boolean onKey(int keyCode, boolean down, int unicodeChar);
+              }
+
+              /** Return true to consume the event. */
+              interface TouchHandler {
+                  boolean onTouch(int action, int pointerId, float x, float y);
+              }
+
+              /** Return true to consume the event. */
+              interface MouseHandler {
+                  boolean onMouse(int button, boolean down);
+              }
+
+              /** Needs "attackEvent": true in the host's config. */
+              interface AttackHandler {
+                  void onAttack(long timeMs);
+              }
+
+              /** About 20 times a second from a host thread. This is NOT the game tick. */
+              interface TickHandler {
+                  void onTick(long dtMs);
+              }
+
+              String id();
+
+              String name();
+
+              String version();
+
+              String author();
+
+              String description();
+
+              /** Folder the jar lives in. */
+              File dir();
+
+              /** Private folder for this mod's files. */
+              File dataDir();
+
+              void log(String message);
+
+              void warn(String message);
+
+              void error(String message);
+
+              void onKey(KeyHandler handler);
+
+              void onTouch(TouchHandler handler);
+
+              void onMouse(MouseHandler handler);
+
+              void onAttack(AttackHandler handler);
+
+              void onTick(TickHandler handler);
+
+              TimerHandle after(long delayMs, Runnable task);
+
+              TimerHandle every(long periodMs, Runnable task);
+
+              /** Register the in-game menu. Call at most once, from onLoad. */
+              void registerMenu(Menu menu);
+
+              Settings settings();
+
+              Storage storage();
+
+              /** False while the module's menu toggle is off. */
+              boolean isEnabled();
+          }
+          SRCEOF
+          cat > java/src/org/modhost/Native.java <<'SRCEOF'
+          package org.modhost;
+
+          /** The real {@link NativeApi}: its static native methods are bound by the C++ side. */
+          public final class Native implements NativeApi {
+              static native boolean registerMenu0(String moduleId, String name, String description, boolean enabled,
+                      String[] settings);
+
+              static native void unregisterMenu0(String moduleId);
+
+              static native void log0(String level, String modId, String message);
+
+              @Override
+              public boolean registerMenu(String moduleId, String name, String description, boolean enabled,
+                      String[] settings) {
+                  return registerMenu0(moduleId, name, description, enabled, settings);
+              }
+
+              @Override
+              public void unregisterMenu(String moduleId) {
+                  unregisterMenu0(moduleId);
+              }
+
+              @Override
+              public void log(String level, String modId, String message) {
+                  log0(level, modId, message);
+              }
+          }
+          SRCEOF
+          cat > java/src/org/modhost/NativeApi.java <<'SRCEOF'
+          package org.modhost;
+
+          /** What the Java host needs from the native side (the game process). */
+          public interface NativeApi {
+              /**
+               * Registers the in-game menu module. Each settings entry is
+               * key, label, type, current value, min, max joined with the character U+001F.
+               */
+              boolean registerMenu(String moduleId, String name, String description, boolean enabled, String[] settings);
+
+              void unregisterMenu(String moduleId);
+
+              void log(String level, String modId, String message);
+          }
+          SRCEOF
+          cat > java/src/org/modhost/Setting.java <<'SRCEOF'
+          package org.modhost;
+
+          /** One entry of a {@link Menu}. Created through the Menu helper methods. */
+          public final class Setting {
+              public static final String TOGGLE = "toggle";
+              public static final String SLIDER = "slider";
+              public static final String FLOAT = "float";
+
+              public final String key;
+              public final String label;
+              public final String type;
+              public final String defaultValue;
+              public final String min;
+              public final String max;
+
+              Setting(String key, String label, String type, String defaultValue, String min, String max) {
+                  this.key = key;
+                  this.label = label;
+                  this.type = type;
+                  this.defaultValue = defaultValue;
+                  this.min = min;
+                  this.max = max;
+              }
+          }
+          SRCEOF
+          cat > java/src/org/modhost/Settings.java <<'SRCEOF'
+          package org.modhost;
+
+          /** Current values of the settings declared in a {@link Menu}. */
+          public interface Settings {
+              boolean getBoolean(String key);
+
+              int getInt(String key);
+
+              double getDouble(String key);
+
+              String getString(String key);
+          }
+          SRCEOF
+          cat > java/src/org/modhost/Storage.java <<'SRCEOF'
+          package org.modhost;
+
+          /** Small key/value store kept between runs, private to the mod. */
+          public interface Storage {
+              String getString(String key, String defaultValue);
+
+              long getLong(String key, long defaultValue);
+
+              boolean getBoolean(String key, boolean defaultValue);
+
+              void putString(String key, String value);
+
+              void putLong(String key, long value);
+
+              void putBoolean(String key, boolean value);
+
+              void remove(String key);
+          }
+          SRCEOF
+          cat > java/src/org/modhost/TimerHandle.java <<'SRCEOF'
+          package org.modhost;
+
+          /** A scheduled task. */
+          public interface TimerHandle {
+              void cancel();
+          }
+          SRCEOF
+          cat > examples/java/HelloJavaMod.java <<'SRCEOF'
+          package example.hello;
+
+          import org.modhost.*;
+
+          /** A small Java mod for Mod Host. Build it with the workflow in docs/JAVA_MODS.md. */
+          public class HelloJavaMod implements Mod {
+              private int hits;
+
+              @Override
+              public void onLoad(ModContext ctx) {
+                  ctx.registerMenu(new Menu("Hello Java")
+                          .description("Example Java mod: logs key presses and greets you.")
+                          .toggle("logKeys", "Log key presses", false)
+                          .slider("greetDelay", "Greeting delay (s)", 3, 1, 30));
+
+                  ctx.after(ctx.settings().getInt("greetDelay") * 1000L,
+                          () -> ctx.log("Hello from Java! This is " + ctx.name()));
+
+                  ctx.onKey((code, down, unicodeChar) -> {
+                      if (down && ctx.settings().getBoolean("logKeys")) {
+                          ctx.log("key " + code);
+                      }
+                      return false; // do not consume the key
+                  });
+
+                  ctx.onAttack(timeMs -> {
+                      hits++;
+                      ctx.storage().putLong("hits", hits);
+                  });
+              }
+          }
+          SRCEOF
+          cat > examples/java/modhost-mod.properties <<'SRCEOF'
+          main=example.hello.HelloJavaMod
+          id=hello_java
+          name=Hello Java
+          version=1.0
+          author=you
+          description=Example Java mod
+          api=1
+          SRCEOF
+
+      - name: Install NDK and Ninja
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-28" "ndk;28.2.13676358"
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Build Java bridge
+        run: |
+          set -e
+          PLATFORM_JAR="$ANDROID_HOME/platforms/android-28/android.jar"
+          D8="$(ls -d $ANDROID_HOME/build-tools/*/d8 | sort -V | tail -1)"
+          mkdir -p build-java/classes build-java/dex build-java/hello/classes build-java/hello/dex
+          javac --release 8 -Xlint:-options -d build-java/classes $(find java/src -name '*.java')
+          "$D8" --release --min-api 26 --lib "$PLATFORM_JAR" --output build-java/dex $(find build-java/classes -name '*.class')
+          python3 - <<'PYEOF'
+          data = open('build-java/dex/classes.dex', 'rb').read()
+          with open('src/mod/BridgeDex.inc', 'w') as f:
+              f.write('// Generated from the compiled Java bridge.\nstatic const unsigned char kBridgeDex[] = {\n')
+              for i in range(0, len(data), 16):
+                  f.write(','.join(str(b) for b in data[i:i + 16]) + ',\n')
+              f.write('0};\nstatic const unsigned int kBridgeDexSize = %d;\n' % len(data))
+          PYEOF
+          jar --create --file build-java/modhost-api.jar -C build-java/classes .
+          javac --release 8 -Xlint:-options -cp build-java/classes -d build-java/hello/classes examples/java/HelloJavaMod.java
+          "$D8" --release --min-api 26 --lib "$PLATFORM_JAR" --classpath build-java/classes --output build-java/hello/dex $(find build-java/hello/classes -name '*.class')
+          cp examples/java/modhost-mod.properties build-java/hello/dex/
+          (cd build-java/hello/dex && jar --create --file ../../hello-java-mod.jar classes.dex modhost-mod.properties)
+
+      - name: Build packages
+        shell: pwsh
+        run: ./scripts/package.ps1 -Abi arm64-v8a
+
+      - name: Upload Mod Host
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-host
+          path: build-*/*.levipack
+
+      - name: Upload Java API jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: modhost-api
+          path: build-java/modhost-api.jar
+
+      - name: Upload Hello Java mod
+        uses: actions/upload-artifact@v4
+        with:
+          name: hello-java-mod
+          path: build-java/hello-java-mod.jar
